@@ -34,22 +34,69 @@ interface BodyContent {
   readonly data?: Uint8Array<ArrayBuffer>
 }
 
+/** The props any annotator body receives from its slot's inject factory. */
+export interface AnnotatorInjected {
+  /** Injected session delivery face. */
+  readonly sessions: SessionsLike | undefined
+  /** Session this body belongs to, passed by the inject factory. */
+  readonly sessionId: string
+  /** Injected locale id used by the local fallback dictionary. */
+  readonly localeId: string
+}
+
+/**
+ * One page of a paged document, supplied by the renderer that owns its pages.
+ *
+ * The body annotates this page instead of the file's own bytes: the renderer
+ * decides the raster, the unit size marks are measured in, and how to reach the
+ * neighbouring pages. Marks are recorded in page units, so they mean the same
+ * thing at any zoom or pane width.
+ */
+export interface PageSurface {
+  /** 1-based number of the page on screen. */
+  readonly page: number
+  /** Pages in the document. */
+  readonly pageCount: number
+  /** PNG data URL of the page, and the page's own size in page units. */
+  readonly source: {
+    readonly dataUrl: string
+    readonly width: number
+    readonly height: number
+  }
+  /** Move to another page, when the renderer offers navigation. */
+  readonly goTo?: ((page: number) => void) | undefined
+}
+
+/** Unsaved edits of one surface, as an owner that unmounts surfaces keeps them. */
+export interface SurfaceDraft {
+  /** Marks drawn so far. */
+  readonly marks: readonly AnnotationMark[]
+  /** The overall note so far. */
+  readonly summary: string
+}
+
 /** Everything the body reads; all of it arrives through the composed props. */
 export interface AnnotatorBodyProps {
   /** Document content: complete bytes for a `bytes-complete` renderer. */
-  readonly content?: BodyContent
+  readonly content?: BodyContent | undefined
+  /** The page a paged renderer put on screen, when this body annotates one page. */
+  readonly page?: PageSurface | undefined
+  /** Edits this surface had before it mounted; a saved document still wins over them. */
+  readonly draft?: SurfaceDraft | undefined
+  /** Reports every edit, so an owner that unmounts surfaces loses no unsaved work. */
+  readonly onDraftChange?: ((draft: SurfaceDraft) => void) | undefined
   /** The tab's `dsh-resource://file/…` address. */
-  readonly resourceAddress?: string
+  readonly resourceAddress?: string | undefined
   /** Owner callback that registers the body's scrollport. */
-  readonly scrollportRef?: (element: HTMLElement | null) => void
+  readonly scrollportRef?: ((element: HTMLElement | null) => void) | undefined
   /** Locale seat bound by the shell when the namespace is registered. */
-  readonly t?: (key: string, vars?: Record<string, unknown>) => string
+  readonly t?: ((key: string, vars?: Record<string, unknown>) => string) | undefined
   /** Injected session delivery face. */
-  readonly sessions?: SessionsLike
+  readonly sessions?: SessionsLike | undefined
   /** Session this body belongs to, passed by the inject factory. */
-  readonly sessionId?: string
+  readonly sessionId?: string | undefined
   /** Injected locale id used by the local fallback dictionary. */
-  readonly localeId?: string
+  readonly localeId?: string | undefined
 }
 
 /** Palette offered by the toolbar. */
@@ -135,20 +182,34 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const stageRef = useRef<HTMLDivElement | null>(null)
   const figureHostRef = useRef<HTMLDivElement | null>(null)
   const surfaceRef = useRef<HTMLDivElement | null>(null)
-  const [figure, setFigure] = useState<LoadedFigure | null>(null)
-  const [rasterSize, setRasterSize] = useState<{ readonly width: number; readonly height: number } | null>(null)
+  const [fileFigure, setFileFigure] = useState<LoadedFigure | null>(null)
+  const [fileRasterSize, setFileRasterSize] = useState<{ readonly width: number; readonly height: number } | null>(null)
   const [figureError, setFigureError] = useState<string | null>(null)
+
+  /**
+   * The surface being annotated: the page a paged renderer supplied, else the
+   * file's own figure. One value either way, so everything below reads one shape.
+   */
+  const surface = props.page
+  const figure: LoadedFigure | null = surface === undefined
+    ? fileFigure
+    : { kind: 'raster', objectUrl: surface.source.dataUrl, dataUrl: surface.source.dataUrl }
+  const rasterSize = surface === undefined
+    ? fileRasterSize
+    : { width: surface.source.width, height: surface.source.height }
 
   const [loaded, setLoaded] = useState<LoadedAnnotation | null>(null)
   const [hostError, setHostError] = useState<string | null>(null)
   const [mode, setMode] = useState<'view' | 'annotate'>('view')
   const [tool, setTool] = useState<Tool>('arrow')
   const [color, setColor] = useState<string>(COLORS[0])
-  const [marks, setMarks] = useState<AnnotationMark[]>([])
+  const [marks, setMarks] = useState<AnnotationMark[]>(() => [...(props.draft?.marks ?? [])])
   const [past, setPast] = useState<AnnotationMark[][]>([])
   const [future, setFuture] = useState<AnnotationMark[][]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [summary, setSummary] = useState('')
+  // A draft is what this surface already held when it mounted; the Host's saved
+  // document replaces it as soon as the read returns.
+  const [summary, setSummary] = useState(props.draft?.summary ?? '')
   const [createdAt, setCreatedAt] = useState<string | null>(null)
   const [stale, setStale] = useState(false)
   const [zoom, setZoom] = useState<number | 'fit'>('fit')
@@ -182,6 +243,9 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   // --- figure loading -------------------------------------------------------
 
   useEffect(() => {
+    // A page surface arrives rendered, so the file's bytes are not this body's
+    // to decode: decoding them here would fight the renderer that owns them.
+    if (surface !== undefined) return
     if (data === undefined || mediaType === undefined) return
     if (mediaType === 'image/svg+xml') {
       const root = parseFigureSvg(new TextDecoder().decode(data))
@@ -195,7 +259,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       root.setAttribute('width', String(intrinsic.width))
       root.setAttribute('height', String(intrinsic.height))
       root.classList.add('da-figure')
-      setFigure({
+      setFileFigure({
         kind: 'svg',
         width: intrinsic.width,
         height: intrinsic.height,
@@ -205,10 +269,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       return
     }
     const objectUrl = URL.createObjectURL(new Blob([data], { type: mediaType }))
-    setRasterSize(null)
-    setFigure({ kind: 'raster', objectUrl, dataUrl: bytesToDataUrl(data, mediaType) })
+    setFileRasterSize(null)
+    setFileFigure({ kind: 'raster', objectUrl, dataUrl: bytesToDataUrl(data, mediaType) })
     return () => { URL.revokeObjectURL(objectUrl) }
-  }, [data, mediaType, t])
+  }, [data, mediaType, surface, t])
 
   // --- host annotation ------------------------------------------------------
 
@@ -217,13 +281,13 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     const controller = new AbortController()
     void (async () => {
       try {
-        const result = await loadAnnotation(address, controller.signal)
+        const result = await loadAnnotation(address, controller.signal, surface?.page)
         if (controller.signal.aborted) return
         setLoaded(result)
         setHostError(null)
         if (result.annotation !== null) {
           setMarks([...result.annotation.marks])
-          setSummary(result.annotation.summary ?? '')
+          setSummary(result.annotation.summary ?? props.draft?.summary ?? '')
           setCreatedAt(result.annotation.createdAt)
           setStale(result.annotation.figure.sha256 !== result.sha256)
           if (result.annotation.marks.length > 0) setMode('annotate')
@@ -234,7 +298,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       }
     })()
     return () => { controller.abort() }
-  }, [address, mediaType])
+  }, [address, mediaType, surface?.page])
 
   // --- fit width ------------------------------------------------------------
 
@@ -294,6 +358,12 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     })
   }, [marks])
 
+  /**
+   * Report every edit upward, so an owner that unmounts this surface (a page
+   * change) can hand the unsaved work back when the surface returns.
+   */
+  useEffect(() => { props.onDraftChange?.({ marks, summary }) }, [marks, summary, props.onDraftChange])
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'z' && event.key !== 'Z') return
@@ -326,13 +396,16 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         width: target.width,
         height: target.height,
         sha256: loaded.sha256,
+        // A page surface records which page it was, so several annotated pages
+        // of one document stay separate sidecars with separate coordinates.
+        ...(surface === undefined ? {} : { page: surface.page, pageCount: surface.pageCount }),
       },
       createdAt: createdAt ?? now,
       updatedAt: now,
       marks,
       ...(summary.trim() === '' ? {} : { summary: summary.trim() }),
     }
-  }, [address, createdAt, loaded, marks, summary])
+  }, [address, createdAt, loaded, marks, summary, surface])
 
   const run = useCallback(async (deliver: boolean): Promise<void> => {
     // The only enforcement point: the toolbar buttons stay clickable so this
@@ -372,7 +445,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   // --- render ---------------------------------------------------------------
 
   if (mediaType === undefined) return <p className="da-hint">{t('unsupported')}</p>
-  if (data === undefined) return <p className="da-hint">{t('loading')}</p>
+  if (data === undefined && surface === undefined) return <p className="da-hint">{t('loading')}</p>
   if (figureError !== null) return <p className="da-hint" role="alert">{figureError}</p>
 
   const selected = marks.find(mark => mark.id === selectedId) ?? null
@@ -390,6 +463,19 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           onClick={() => { setMode('view') }}>{t('view')}</button>
         <button type="button" className="da-btn" aria-pressed={mode === 'annotate'}
           onClick={() => { setMode('annotate') }}>{t('annotate')}</button>
+        {surface === undefined ? null : (
+          <>
+            {/* Navigation belongs to the renderer that owns the pages; a surface
+                without it still shows where the reader is. */}
+            <button type="button" className="da-btn"
+              disabled={surface.goTo === undefined || surface.page <= 1}
+              onClick={() => { surface.goTo?.(surface.page - 1) }}>{t('previousPage')}</button>
+            <span className="da-page">{`${surface.page} / ${surface.pageCount}`}</span>
+            <button type="button" className="da-btn"
+              disabled={surface.goTo === undefined || surface.page >= surface.pageCount}
+              onClick={() => { surface.goTo?.(surface.page + 1) }}>{t('nextPage')}</button>
+          </>
+        )}
         <span className="da-spacer" />
         {mode === 'annotate' ? (
           <>
@@ -442,7 +528,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
                 alt=""
                 onLoad={(event) => {
                   const image = event.currentTarget
-                  setRasterSize({ width: image.naturalWidth, height: image.naturalHeight })
+                  setFileRasterSize({ width: image.naturalWidth, height: image.naturalHeight })
                 }}
               />
             ) : null}

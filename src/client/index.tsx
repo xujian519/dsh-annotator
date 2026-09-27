@@ -1,10 +1,12 @@
 /**
  * Browser half of the annotator.
  *
- * It registers one document renderer for image files (so opening a figure in the
- * right Sidebar offers the annotator) and its body in the keyed document slot.
+ * It registers one document renderer per annotatable kind — images and PDFs —
+ * so opening either in the right Sidebar offers the annotator, and registers
+ * each renderer's body in the keyed document slot. The PDF body lives in a
+ * package-local chunk that is fetched only when a PDF opens.
  * Everything else — reading the figure bytes, storing marks, reaching the agent —
- * happens inside the body through the owner and the injected session service.
+ * happens inside a body through the owner and the injected session service.
  *
  * All three services are hard requirements: without the preview registry there is
  * nothing to open, without the slot registry nowhere to render, and without the
@@ -14,8 +16,11 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { AnnotatorBody } from './AnnotatorBody'
+import type { AnnotatorInjected } from './AnnotatorBody'
+import { LazyPdfBody } from './LazyPdfBody'
 import { NAMESPACE, en, zh } from './locales'
 import { missingService } from '../missing-service'
+import type { PdfBodyInjected } from './pdf/PdfBody'
 import type { SessionsLike } from './session'
 
 /** Plugin name reported to the client module loader. */
@@ -24,14 +29,20 @@ export const name = 'dsh-annotator-client'
 /** Client services this plugin waits for before it mounts anything. */
 export const inject = ['slots', 'locale', 'documentPreviews']
 
-/** Implementation identity, shared by the renderer metadata and its slot entry. */
+/** Implementation identity of the image renderer, shared by its metadata and its slot entry. */
 export const BODY_ID = 'dsh-annotator/image'
 
-/** Suffixes the annotator claims, matching the shell's builtin image renderer. */
+/** Implementation identity of the PDF renderer, shared by its metadata and its slot entry. */
+export const PDF_BODY_ID = 'dsh-annotator/pdf'
+
+/** Suffixes the annotator claims for whole-file figures, matching the shell's builtin image renderer. */
 const EXTENSIONS = ['svg', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico'] as const
 
 /** Suffixes whose bytes are not readable as text. */
 const BINARY_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico'] as const
+
+/** Suffix the PDF renderer claims, ranking above the shell's read-only PDF preview. */
+const PDF_EXTENSIONS = ['pdf'] as const
 
 /** Document renderer registry slice this plugin registers into. */
 interface DocumentPreviewsLike {
@@ -60,11 +71,7 @@ interface LocaleLike {
 }
 
 /** What the keyed body slot injects, typed so no `any` crosses the hand-off. */
-interface BodyInjected {
-  readonly sessions: SessionsLike | undefined
-  readonly sessionId: string
-  readonly localeId: string
-}
+type BodyInjected = AnnotatorInjected
 
 /**
  * Mount the browser half.
@@ -101,4 +108,26 @@ export function apply(ctx: Context): void {
       localeId: locale.getLocale().locale ?? 'zh',
     }),
   }, AnnotatorBody)), 'dsh-annotator: document body')
+  ctx.effect(() => previews.register({
+    id: PDF_BODY_ID,
+    extensions: PDF_EXTENSIONS,
+    binaryExtensions: PDF_EXTENSIONS,
+    priority: 'extension',
+    title: () => locale.bind(NAMESPACE)('pdfTitle'),
+    loading: 'bytes-complete',
+    wrap: false,
+  }), 'dsh-annotator: pdf renderer metadata')
+  ctx.effect(() => slots.inject('sidebar.right.tab.document', () => slots.register({
+    name: 'sidebar.right.tab.document',
+    key: PDF_BODY_ID,
+    locale: NAMESPACE,
+    // The chunk cannot import its own package's entry bundle, so the annotator
+    // body it renders each page with crosses as an injected prop.
+    inject: (sessionId: unknown): PdfBodyInjected => ({
+      sessions: ctx.get('sessions') as SessionsLike | undefined,
+      sessionId: String(sessionId),
+      localeId: locale.getLocale().locale ?? 'zh',
+      AnnotatorBody,
+    }),
+  }, LazyPdfBody)), 'dsh-annotator: pdf document body')
 }

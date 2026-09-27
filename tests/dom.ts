@@ -150,8 +150,46 @@ export function stubRasterizer(faults: RasterizerFaults = {}): RasterizerLog {
         // jsdom has never implemented.
         callback(faults.noBlob === true ? null : new NodeBlob([new Uint8Array([9])], { type: 'image/png' }) as Blob)
       },
+      // The PDF path encodes the page through the canvas rather than a Blob.
+      toDataURL: (): string => {
+        log.canvasSizes.push({ width: canvas.width, height: canvas.height })
+        return `data:image/png;base64,${'c3R1Yg=='}`
+      },
     }
     return canvas
   }) as typeof document_.createElement
   return log
+}
+
+/** One `Worker` a spec constructed, and whether it was terminated. */
+export interface StubWorker {
+  /** URL the worker was constructed with. */
+  readonly url: string
+  /** Options the worker was constructed with. */
+  readonly options: WorkerOptions | undefined
+  /** Whether `terminate()` was called. */
+  terminated: boolean
+}
+
+/**
+ * Install a `Worker` double. jsdom ships no worker implementation, so the PDF
+ * path would otherwise fail before it reached PDF.js.
+ * @returns the workers that were constructed, in order.
+ */
+export function stubWorkers(): StubWorker[] {
+  const workers: StubWorker[] = []
+  ;(globalThis as Record<string, unknown>)['Worker'] = class {
+    readonly record: StubWorker
+    /**
+     * @param url - the worker's source URL.
+     * @param options - the worker's options.
+     */
+    constructor(url: string, options?: WorkerOptions) {
+      this.record = { url, options, terminated: false }
+      workers.push(this.record)
+    }
+    /** Record that the worker was stopped. */
+    terminate(): void { this.record.terminated = true }
+  }
+  return workers
 }

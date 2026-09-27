@@ -45,6 +45,11 @@ export const zh = {
   readError: '读取标注失败',
   saveError: '保存标注失败',
   emptyText: '（文字）',
+  pdfTitle: 'PDF 批注',
+  previousPage: '上一页',
+  nextPage: '下一页',
+  pdfRendering: '正在渲染这一页…',
+  pdfOpenFailed: '打开 PDF 失败：',
 } as const
 
 /** English copy. */
@@ -86,6 +91,11 @@ export const en: Record<keyof typeof zh, string> = {
   readError: 'Reading the annotation failed',
   saveError: 'Saving the annotation failed',
   emptyText: '(text)',
+  pdfTitle: 'PDF annotations',
+  previousPage: 'Previous page',
+  nextPage: 'Next page',
+  pdfRendering: 'Rendering this page…',
+  pdfOpenFailed: 'Opening the PDF failed: ',
 }
 
 /** Locale namespace this dictionary registers under. */

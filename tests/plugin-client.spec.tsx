@@ -2,7 +2,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
 import { AnnotatorBody } from '../src/client/AnnotatorBody'
-import { BODY_ID, apply, inject, name } from '../src/client/index'
+import { LazyPdfBody } from '../src/client/LazyPdfBody'
+import { BODY_ID, PDF_BODY_ID, apply, inject, name } from '../src/client/index'
 import { NAMESPACE, en, zh } from '../src/client/locales'
 import { missingService } from '../src/missing-service'
 
@@ -82,11 +83,11 @@ describe('browser entry', () => {
     expect(inject).toEqual(['slots', 'locale', 'documentPreviews'])
   })
 
-  it('registers both dictionaries, the renderer metadata, and the slot body', () => {
+  it('registers both dictionaries, both renderer kinds, and both bodies', () => {
     const stub = stubContext()
     apply(stub.ctx)
     expect(stub.dictionaries).toEqual([{ namespace: NAMESPACE, zh, en }])
-    expect(stub.definitions).toHaveLength(1)
+    expect(stub.definitions).toHaveLength(2)
     expect(stub.definitions[0]).toMatchObject({
       id: BODY_ID,
       priority: 'extension',
@@ -97,19 +98,36 @@ describe('browser entry', () => {
     expect(stub.definitions[0]?.extensions).toContain('png')
     expect(stub.definitions[0]?.binaryExtensions).toContain('png')
     expect(stub.definitions[0]?.binaryExtensions).not.toContain('svg')
-    expect(stub.injectedKeys).toEqual(['sidebar.right.tab.document'])
+    // An extension-band PDF renderer is what keeps the shell's read-only preview
+    // as the fallback in the renderer dropdown rather than the only option.
+    expect(stub.definitions[1]).toMatchObject({
+      id: PDF_BODY_ID,
+      extensions: ['pdf'],
+      binaryExtensions: ['pdf'],
+      priority: 'extension',
+      loading: 'bytes-complete',
+      wrap: false,
+    })
+    expect(stub.injectedKeys).toEqual(['sidebar.right.tab.document', 'sidebar.right.tab.document'])
     expect(stub.slots[0]?.options).toMatchObject({
       name: 'sidebar.right.tab.document',
       key: BODY_ID,
       locale: NAMESPACE,
     })
     expect(stub.slots[0]?.component).toBe(AnnotatorBody)
+    expect(stub.slots[1]?.options).toMatchObject({
+      name: 'sidebar.right.tab.document',
+      key: PDF_BODY_ID,
+      locale: NAMESPACE,
+    })
+    expect(stub.slots[1]?.component).toBe(LazyPdfBody)
   })
 
-  it('lets the registry ask for the renderer title in the active locale', () => {
+  it('lets the registry ask for each renderer title in the active locale', () => {
     const stub = stubContext()
     apply(stub.ctx)
     expect(stub.definitions[0]?.title()).toBe(`${NAMESPACE}.title`)
+    expect(stub.definitions[1]?.title()).toBe(`${NAMESPACE}.pdfTitle`)
   })
 
   it('injects the session face, the session id, and the active locale id', () => {
@@ -120,6 +138,15 @@ describe('browser entry', () => {
     expect(typeof factory).toBe('function')
     const injected = (factory as (id: unknown) => unknown)(123)
     expect(injected).toEqual({ sessions, sessionId: '123', localeId: 'en-US' })
+  })
+
+  it('hands the PDF chunk the annotator body it renders each page with', () => {
+    const stub = stubContext()
+    apply(stub.ctx)
+    const factory = stub.slots[1]?.options['inject'] as (id: unknown) => { AnnotatorBody: unknown }
+    // The chunk cannot import its own package's entry bundle, so the component
+    // it mounts per page arrives through the injection.
+    expect(factory('s1').AnnotatorBody).toBe(AnnotatorBody)
   })
 
   it('falls back to Chinese when the locale service reports no active locale', () => {

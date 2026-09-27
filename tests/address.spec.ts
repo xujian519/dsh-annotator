@@ -49,6 +49,7 @@ describe('figure suffixes', () => {
   it('recognizes the renderable suffixes', () => {
     expect(isFigurePath('/a/b/FIG1.SVG')).toBe(true)
     expect(isFigurePath('图1.png')).toBe(true)
+    expect(isFigurePath('/a/b/report.pdf')).toBe(true)
     expect(isFigurePath('/a/b/notes.md')).toBe(false)
     expect(isFigurePath('/a/b/noextension')).toBe(false)
     expect(suffixOf('/a/b/.hidden')).toBe('')
@@ -63,7 +64,8 @@ describe('figure suffixes', () => {
     expect(figureMediaType('a.bmp')).toBe('image/bmp')
     expect(figureMediaType('a.gif')).toBe('image/gif')
     expect(figureMediaType('a.ico')).toBe('image/x-icon')
-    expect(figureMediaType('a.pdf')).toBeUndefined()
+    expect(figureMediaType('a.pdf')).toBe('application/pdf')
+    expect(figureMediaType('a.txt')).toBeUndefined()
   })
 
   it('reads the suffix of a Windows-separated path too', () => {
@@ -84,8 +86,16 @@ describe('sidecar paths', () => {
     expect(sidecarPaths('/w/图 1.a.svg').annotation).toBe('/w/图 1.a.svg.annot.json')
   })
 
+  it('names one page of a paged document after that page', () => {
+    expect(sidecarPaths('/w/figures/report.pdf', 3)).toEqual({
+      annotation: '/w/figures/report.pdf.p3.annot.json',
+      annotatedImage: '/w/figures/report.pdf.p3.annotated.png',
+    })
+  })
+
   it('still names the marks file earlier versions derived from the base name', () => {
     expect(legacyAnnotationPath('/w/figures/fig1.svg')).toBe('/w/figures/fig1.annot.json')
+    expect(legacyAnnotationPath('/w/figures/report.pdf', 3)).toBe('/w/figures/report.p3.annot.json')
   })
 
   it('offers the legacy name only as a fallback, and deduplicates a name without extension', () => {

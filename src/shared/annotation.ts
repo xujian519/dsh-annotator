@@ -79,6 +79,36 @@ export interface AnnotatedFigure {
   readonly height: number
   /** Content hash of the figure at annotation time, used to detect a redraw. */
   readonly sha256: string
+  /**
+   * 1-based page the marks belong to, for a figure whose annotation is one page
+   * of a paged document. Width and height are that page's own size, so marks stay
+   * page-relative and survive any zoom or pane width.
+   */
+  readonly page?: number
+  /** Pages in that document, for the model-facing text. */
+  readonly pageCount?: number
+}
+
+/**
+ * Suffix naming one page's sidecar files inside a paged document's name.
+ * @param page - 1-based page, or undefined for a single-surface figure.
+ * @returns the suffix, empty when the figure has no pages.
+ */
+export function pageFileSuffix(page: number | undefined): string {
+  return page === undefined ? '' : `.p${page}`
+}
+
+/**
+ * Describe which part of a figure the marks belong to.
+ * @param figure - the annotated figure.
+ * @param locale - language of the surrounding message.
+ * @returns the scope in words, or an empty string for a single-surface figure.
+ */
+export function describeFigureScope(figure: AnnotatedFigure, locale: SummaryLocale): string {
+  if (figure.page === undefined) return ''
+  const zh = locale === 'zh'
+  if (figure.pageCount === undefined) return zh ? `第 ${figure.page} 页` : `page ${figure.page}`
+  return zh ? `第 ${figure.page} 页/共 ${figure.pageCount} 页` : `page ${figure.page} of ${figure.pageCount}`
 }
 
 /** The sidecar document persisted beside one figure. */

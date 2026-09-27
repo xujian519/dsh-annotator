@@ -9,7 +9,7 @@
  */
 
 import type { AnnotationDocument, SummaryLocale } from '../shared/annotation'
-import { describeMarks } from '../shared/annotation'
+import { describeFigureScope, describeMarks, pageFileSuffix } from '../shared/annotation'
 
 /** The session face this module calls. */
 interface SessionFaceLike {
@@ -54,9 +54,12 @@ export function buildAnnotationMessage(
 ): string {
   const zh = locale === 'zh'
   const { figure, marks } = document
+  // A page of a paged document names itself, both in the header the model reads
+  // and in the sidecar paths, so several annotated pages stay distinguishable.
+  const scope = describeFigureScope(figure, locale)
   const header = zh
-    ? `【附图标注】${figure.path}（图面 ${Math.round(figure.width)}×${Math.round(figure.height)}，标注 ${marks.length} 处，图 sha256:${figure.sha256.slice(0, 12)}）`
-    : `[figure annotations] ${figure.path} (figure ${Math.round(figure.width)}x${Math.round(figure.height)}, ${marks.length} marks, sha256:${figure.sha256.slice(0, 12)})`
+    ? `【附图标注】${figure.path}（${scope === '' ? '' : `${scope}，`}图面 ${Math.round(figure.width)}×${Math.round(figure.height)}，标注 ${marks.length} 处，图 sha256:${figure.sha256.slice(0, 12)}）`
+    : `[figure annotations] ${figure.path} (${scope === '' ? '' : `${scope}, `}figure ${Math.round(figure.width)}x${Math.round(figure.height)}, ${marks.length} marks, sha256:${figure.sha256.slice(0, 12)})`
   const files = [
     zh ? `标注文件：${paths.annotationPath}` : `annotation file: ${paths.annotationPath}`,
     ...(paths.annotatedImagePath === null ? [] : [zh ? `标注图：${paths.annotatedImagePath}` : `annotated image: ${paths.annotatedImagePath}`]),
@@ -118,7 +121,7 @@ export async function deliverAnnotation(
       type: 'image',
       mediaType: 'image/png',
       data: await encodePng(reviewImage),
-      name: `${baseName(document.figure.path)}.annotated.png`,
+      name: `${baseName(document.figure.path)}${pageFileSuffix(document.figure.page)}.annotated.png`,
     })
   }
   content.push({ type: 'text', text: buildAnnotationMessage(document, paths, locale) })

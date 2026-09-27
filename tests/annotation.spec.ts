@@ -7,8 +7,10 @@ import type { AnnotationDocument, AnnotationMark, MarkKind } from '../src/shared
 import {
   ANNOTATION_VERSION,
   ANNOTATION_VERSION_V2,
+  describeFigureScope,
   describeMark,
   describeMarks,
+  pageFileSuffix,
 } from '../src/shared/annotation'
 import { readAnnotation, readAnnotationDocument, writeAnnotation } from '../src/host/store'
 import { buildAnnotationMessage } from '../src/client/session'
@@ -331,5 +333,61 @@ describe('model-facing summary', () => {
     expect(withAnchor({ tag: 'text', text: '导柱', bbox: [0, 0, 1, 1] })).toContain('（元素文字「导柱」）')
     expect(withAnchor({ tag: 'g', title: '102', bbox: [0, 0, 1, 1] })).toContain('（元素标题「102」）')
     expect(withAnchor(undefined)).toBe('① 矩形 (0,0)-(1,1)：（未写说明）')
+  })
+})
+
+describe('paged documents', () => {
+  const page = { ...document_.figure, mediaType: 'application/pdf', path: '/w/report.pdf' }
+
+  it('names one page inside the sidecar file name', () => {
+    expect(pageFileSuffix(undefined)).toBe('')
+    expect(pageFileSuffix(3)).toBe('.p3')
+  })
+
+  it('describes which page the marks belong to, with and without a total', () => {
+    expect(describeFigureScope(document_.figure, 'zh')).toBe('')
+    expect(describeFigureScope({ ...page, page: 2 }, 'zh')).toBe('第 2 页')
+    expect(describeFigureScope({ ...page, page: 2 }, 'en')).toBe('page 2')
+    expect(describeFigureScope({ ...page, page: 2, pageCount: 7 }, 'zh')).toBe('第 2 页/共 7 页')
+    expect(describeFigureScope({ ...page, page: 2, pageCount: 7 }, 'en')).toBe('page 2 of 7')
+  })
+
+  it('keeps the page fields a document was written with', () => {
+    const parsed = readAnnotationDocument({ ...document_, figure: { ...page, page: 3, pageCount: 9 } })
+    expect(parsed.figure.page).toBe(3)
+    expect(parsed.figure.pageCount).toBe(9)
+    // A whole-figure document stays exactly as it was: no page fields at all.
+    expect(readAnnotationDocument(JSON.parse(JSON.stringify(document_)) as unknown).figure.page).toBeUndefined()
+  })
+
+  it('rejects a page that is not a positive integer, or beyond the document', () => {
+    for (const value of [0, -1, 1.5, '3', null]) {
+      expect(() => readAnnotationDocument({ ...document_, figure: { ...page, page: value } })).toThrow(/page must be a positive integer/)
+    }
+    expect(() => readAnnotationDocument({ ...document_, figure: { ...page, pageCount: 0 } })).toThrow(/pageCount must be a positive integer/)
+    expect(() => readAnnotationDocument({ ...document_, figure: { ...page, page: 5, pageCount: 3 } })).toThrow(/outside its 3 pages/)
+  })
+
+  it('round-trips one page through its own sidecar file, beside the whole figure', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-annotator-page-'))
+    try {
+      const figure = join(directory, 'report.pdf')
+      await writeFile(figure, '%PDF-1.7')
+      const pageDocument: AnnotationDocument = {
+        ...document_,
+        figure: { ...page, path: figure, sha256: 'c'.repeat(64), width: 595, height: 842, page: 2, pageCount: 4 },
+        marks: [{ id: 'p1', kind: 'rect', color: '#1971c2', points: [[10, 20], [60, 90]] }],
+      }
+      const written = await writeAnnotation(figure, pageDocument)
+      expect(written.paths.annotation).toBe(join(directory, 'report.pdf.p2.annot.json'))
+      expect(await readAnnotation(figure, 2)).toMatchObject({
+        figure: { page: 2, pageCount: 4, width: 595, height: 842 },
+        marks: [{ id: 'p1' }],
+      })
+      // The page's sidecar is not the whole figure's: the two never collide.
+      expect(await readAnnotation(figure)).toBeNull()
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 })

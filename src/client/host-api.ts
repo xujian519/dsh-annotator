@@ -65,11 +65,20 @@ async function blobToBase64(blob: Blob): Promise<string> {
  * Read the figure's saved annotation.
  * @param address - the preview tab's file address.
  * @param signal - cancels the request when the tab closes.
+ * @param page - 1-based page, when the body annotates one page of a document.
  * @returns the Host's answer.
  * @throws {AnnotatorHostError} when the Host refuses the address.
  */
-export async function loadAnnotation(address: string, signal: AbortSignal): Promise<LoadedAnnotation> {
-  const url = `${ROUTE_PREFIX}/annotation?address=${encodeURIComponent(address)}`
+export async function loadAnnotation(
+  address: string,
+  signal: AbortSignal,
+  page?: number,
+): Promise<LoadedAnnotation> {
+  // URLSearchParams round-trips the address exactly, including the `+` and `%`
+  // characters a `dsh-resource://` address may carry.
+  const query = new URLSearchParams({ address })
+  if (page !== undefined) query.set('page', String(page))
+  const url = `${ROUTE_PREFIX}/annotation?${query.toString()}`
   const response = await fetch(url, { headers: { [GUARD_HEADER]: '1' }, signal })
   const body = await response.json() as {
     ok?: boolean

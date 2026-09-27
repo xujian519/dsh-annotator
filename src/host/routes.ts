@@ -90,6 +90,19 @@ async function resolveTarget(
 }
 
 /**
+ * Read the optional page query parameter.
+ * @param value - raw query value.
+ * @returns the 1-based page, or undefined when the request named none.
+ * @throws {Error} when the value is present but is not a positive integer.
+ */
+function readPageParam(value: string | null): number | undefined {
+  if (value === null || value === '') return undefined
+  const page = Number(value)
+  if (!Number.isInteger(page) || page < 1) throw new Error(`page must be a positive integer, got ${value}`)
+  return page
+}
+
+/**
  * Whether a request carries the plugin guard and a same-origin posture.
  * @param req - incoming request.
  * @returns true when the request may proceed.
@@ -151,6 +164,7 @@ export function createHandlers(deps: RouteDeps): {
     try {
       if (req.method === 'GET') {
         const address = url.searchParams.get('address') ?? ''
+        const page = readPageParam(url.searchParams.get('page'))
         const resolved = await resolveTarget(address, deps)
         if (!resolved.ok) {
           sendJson(res, 404, { ok: false, error: resolved.message })
@@ -158,7 +172,7 @@ export function createHandlers(deps: RouteDeps): {
         }
         const [sha256, saved] = await Promise.all([
           fileDigest(resolved.target.path),
-          readAnnotation(resolved.target.path),
+          readAnnotation(resolved.target.path, page),
         ])
         sendJson(res, 200, {
           ok: true,

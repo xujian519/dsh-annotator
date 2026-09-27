@@ -12,7 +12,7 @@ Status: implemented
 
 ## Decision
 
-**命名**（`src/host/sidecar.ts`）：`sidecarPaths()` 改用 `basename(figurePath)`——含扩展名——派生，`fig1.svg` → `fig1.svg.annot.json`。新增 `legacyAnnotationPath()`（旧主名派生，只作只读回退）与 `annotationCandidates()`（新名优先、去重，名字本身没有扩展名时两个候选相同）。
+**命名**（`src/host/sidecar.ts`）：`sidecarPaths()` 改用 `basename(figurePath)`——含扩展名——派生，`fig1.svg` → `fig1.svg.annot.json`；分页文档仍把页号插在名字与后缀之间（`report.pdf.p3.annot.json`）。新增 `legacyAnnotationPath()`（旧主名派生，只作只读回退）与 `annotationCandidates()`（新名优先、去重，名字本身没有扩展名时两个候选相同）。
 
 **目标核对**：新增 `annotationTargetsFigure()`。sidecar 与其图面同目录、两个名字都由图面路径派生，所以**文件名（含扩展名、大小写不敏感）就是全部身份**；采信一份文档之前先核对它 `figure.path` 的文件名就是当前文件。这道核对是旧主名回退能安全存在的前提。
 
@@ -25,7 +25,7 @@ Status: implemented
 ## Alternatives considered
 
 - **只改名字，不读 v2** —— 落选。Sati 写的就是 v2；改了名字但读不懂 v2，互通并没有发生，用户要的那件事没做到。
-- **写侧也升到 v2，两边收敛到同一个 schema** —— 本期落选（不是否决）。本插件的数据模型与 v2 并非逐字段对应，收敛需要两边先就各处差异的落法达成一致，那是一次独立的 schema 统一决定；而这次的目标只是「让 Sati 写下的标注在本插件里可见」，读侧做到就成立。写侧升级留作后续（代价见下）。
+- **写侧也升到 v2，两边收敛到同一个 schema** —— 本期落选（不是否决）。升 v2 要先把分页语义安放好：本插件的 `page`/`pageCount` 在 Sati 的 v2 schema 里没有对应字段，而分页正是当前在写的另一条线。先做读侧能让互通今天就成立，写侧升级留作后续（代价见下）。
 - **回存时保留不建模的字段（原样回写 v2 文档）** —— 落选。本插件的浏览器半会按自己的形状重建整篇文档，要保住对方字段就得把对方的 schema 复制进自己的模型——那等于偷偷做 schema 统一，却没有配套的字段决定与测试。
 - **不再写新名字，只多读一个名字** —— 落选。旧主名是同名不同后缀两份文件共用的，继续写它就把「两份文件互相看不见」重新变成默认行为；而且 Sati 优先读新名字，本插件写旧名字对方也看不到。
 - **不回退读旧主名（升级即弃旧文件）** —— 落选。用户工作区里已经有旧名字写下的标注，读不到就是静默消失。回退读回加上目标核对之后没有这个风险。
@@ -37,4 +37,4 @@ Status: implemented
 
 **付出**：本插件回存一份 v2 文档时按自己的 v1 形状落盘，对方 v2 独有的字段（`target.kind`、逐条 `targetFingerprint`、锚点的 `nodeId`/`ref`）在这一步丢失——这是本期显式选择的取舍，消除它需要写侧升 v2。旧主名文件在升级后成为惰性残留（仍被读回，但新写入不再更新它）；**不自动删除**：删除不可逆，且没有它的位置信息就无法确认归属。
 
-**验证**：`pnpm run check` 的三步（typecheck / lint / `vitest run --coverage`）全绿（214 测试，`src/**` 每文件四项 100% 覆盖率）。新增用例覆盖：v2 读回、旧主名回退、两个名字同时存在时取新名字、旧名文档指向同主名的邻居时拒绝、未知版本／非对象／无 `target` 一律返回 `null`；路由级另有一例走真 HTTP 取回 v2 文档。命名断言在 `tests/address.spec.ts`、`tests/annotation.spec.ts`、`tests/routes.spec.ts` 同步更新。
+**验证**：`pnpm run check` 全绿（typecheck + lint + 263 测试，`src/**` 每文件四项 100% 覆盖率）。新增用例覆盖：v2 读回、旧主名回退、两个名字同时存在时取新名字、旧名文档指向同主名的邻居时拒绝、未知版本／非对象／无 `target` 一律返回 `null`；路由级另有一例走真 HTTP 取回 v2 文档。命名断言在 `tests/address.spec.ts`、`tests/annotation.spec.ts`、`tests/routes.spec.ts` 同步更新。

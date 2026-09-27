@@ -3,8 +3,13 @@
  * @module dsh-annotator/shared/figure-kind
  */
 
-/** File suffixes this plugin treats as annotatable figures. */
-export const FIGURE_EXTENSIONS = ['svg', 'png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'ico'] as const
+/**
+ * File suffixes this plugin treats as annotatable figures.
+ *
+ * A PDF is annotated page by page: the browser half renders one page as a
+ * raster and the sidecar records which page the marks belong to.
+ */
+export const FIGURE_EXTENSIONS = ['svg', 'png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'ico', 'pdf'] as const
 
 /**
  * Read a path's lower-case suffix without the dot.
@@ -33,6 +38,7 @@ export function isFigurePath(path: string): boolean {
  */
 export function figureMediaType(path: string): string | undefined {
   switch (suffixOf(path)) {
+    case 'pdf': return 'application/pdf'
     case 'svg': return 'image/svg+xml'
     case 'png': return 'image/png'
     case 'jpg':

@@ -151,6 +151,65 @@ describe('annotation route', () => {
   })
 })
 
+describe('one page of a paged document', () => {
+  const guard = { [GUARD_HEADER]: '1' }
+  const reportBytes = '%PDF-1.7\n'
+  // The fixture directory only exists once `beforeAll` has run, so these are
+  // built per test rather than at collection time.
+  let address = ''
+  let pageDocument: AnnotationDocument = document_
+
+  beforeEach(async () => {
+    await writeFile(join(directory, 'report.pdf'), reportBytes)
+    address = `dsh-resource://file/session/s1//${directory}/report.pdf`
+    pageDocument = {
+      ...document_,
+      figure: { ...document_.figure, address, path: join(directory, 'report.pdf'), mediaType: 'application/pdf', page: 2, pageCount: 5 },
+    }
+  })
+
+  it('writes the page into its own sidecar, named after the figure and the page', async () => {
+    const save = await fetch(`${origin}/dsh-annotator/annotation`, {
+      method: 'POST',
+      headers: { ...guard, 'content-type': 'application/json' },
+      body: JSON.stringify({ address, annotation: pageDocument }),
+    })
+    expect(save.status).toBe(200)
+    expect(await save.json()).toMatchObject({
+      annotationPath: join(directory, 'report.pdf.p2.annot.json'),
+      annotatedImagePath: null,
+    })
+  })
+
+  it('reads the page a request names, and reports none for the whole figure', async () => {
+    await fetch(`${origin}/dsh-annotator/annotation`, {
+      method: 'POST',
+      headers: { ...guard, 'content-type': 'application/json' },
+      body: JSON.stringify({ address, annotation: pageDocument }),
+    })
+    const read = await fetch(`${origin}/dsh-annotator/annotation?address=${encodeURIComponent(address)}&page=2`, { headers: guard })
+    const loaded = await read.json() as { annotation: AnnotationDocument | null }
+    expect(loaded.annotation?.figure.page).toBe(2)
+    const whole = await fetch(`${origin}/dsh-annotator/annotation?address=${encodeURIComponent(address)}`, { headers: guard })
+    expect((await whole.json() as { annotation: unknown }).annotation).toBeNull()
+  })
+
+  it('refuses a page that is not a positive integer, and a page beyond the document', async () => {
+    for (const value of ['0', '-2', 'abc', '1.5']) {
+      const response = await fetch(`${origin}/dsh-annotator/annotation?address=${encodeURIComponent(address)}&page=${value}`, { headers: guard })
+      expect(response.status).toBe(400)
+      expect(await response.json()).toMatchObject({ error: expect.stringContaining('positive integer') as unknown as string })
+    }
+    const beyond = await fetch(`${origin}/dsh-annotator/annotation`, {
+      method: 'POST',
+      headers: { ...guard, 'content-type': 'application/json' },
+      body: JSON.stringify({ address, annotation: { ...pageDocument, figure: { ...pageDocument.figure, page: 9 } } }),
+    })
+    expect(beyond.status).toBe(400)
+    expect(await beyond.json()).toMatchObject({ error: expect.stringContaining('outside its 5 pages') as unknown as string })
+  })
+})
+
 /** One request the handler sees, built without a socket. */
 interface StubRequest {
   /** HTTP method; leave unset, or set it to undefined, for a request that names none. */

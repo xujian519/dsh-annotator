@@ -111,6 +111,22 @@ function readMark(value: unknown, index: number): AnnotationMark {
 }
 
 /**
+ * Validate one optional page number from the wire.
+ * @param raw - the figure object as it arrived.
+ * @param field - field name, used in the failure message.
+ * @returns the page number, or undefined when the field is absent.
+ * @throws {Error} when the field is present but is not a positive integer.
+ */
+function readPageNumber(raw: Record<string, unknown>, field: 'page' | 'pageCount'): number | undefined {
+  const value = raw[field]
+  if (value === undefined) return undefined
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    throw new Error(`annotation figure ${field} must be a positive integer`)
+  }
+  return value
+}
+
+/**
  * Validate a whole annotation document from the wire.
  * @param value - parsed request body.
  * @returns the validated document.
@@ -135,6 +151,11 @@ export function readAnnotationDocument(value: unknown): AnnotationDocument {
       throw new Error(`annotation figure needs a numeric ${field}`)
     }
   }
+  const page = readPageNumber(figureRaw, 'page')
+  const pageCount = readPageNumber(figureRaw, 'pageCount')
+  if (page !== undefined && pageCount !== undefined && page > pageCount) {
+    throw new Error(`annotation figure page ${page} is outside its ${pageCount} pages`)
+  }
   const marks = raw['marks']
   if (!Array.isArray(marks)) throw new Error('annotation document needs a marks array')
   const updatedAt = typeof raw['updatedAt'] === 'string' ? raw['updatedAt'] : new Date().toISOString()
@@ -147,6 +168,8 @@ export function readAnnotationDocument(value: unknown): AnnotationDocument {
       width: figureRaw['width'] as number,
       height: figureRaw['height'] as number,
       sha256: figureRaw['sha256'] as string,
+      ...(page === undefined ? {} : { page }),
+      ...(pageCount === undefined ? {} : { pageCount }),
     },
     createdAt: typeof raw['createdAt'] === 'string' ? raw['createdAt'] : updatedAt,
     updatedAt,
@@ -163,10 +186,11 @@ export function readAnnotationDocument(value: unknown): AnnotationDocument {
  * that share a base name would otherwise read each other's marks.
  *
  * @param figurePath - absolute path of the figure.
+ * @param page - 1-based page for a paged figure, or undefined for a whole figure.
  * @returns the document, or null when none was stored or it is unreadable.
  */
-export async function readAnnotation(figurePath: string): Promise<AnnotationDocument | null> {
-  for (const candidate of annotationCandidates(figurePath)) {
+export async function readAnnotation(figurePath: string, page?: number): Promise<AnnotationDocument | null> {
+  for (const candidate of annotationCandidates(figurePath, page)) {
     const document = await readSidecar(candidate)
     if (document !== null && annotationTargetsFigure(document, figurePath)) return document
   }
@@ -265,7 +289,7 @@ export async function writeAnnotation(
   document: AnnotationDocument,
   reviewImage?: Uint8Array,
 ): Promise<SaveResult> {
-  const paths = sidecarPaths(figurePath)
+  const paths = sidecarPaths(figurePath, document.figure.page)
   await mkdir(dirname(paths.annotation), { recursive: true })
   const temporary = `${paths.annotation}.tmp-${process.pid}-${Date.now()}`
   await writeFile(temporary, `${JSON.stringify(document, null, 2)}\n`, 'utf8')

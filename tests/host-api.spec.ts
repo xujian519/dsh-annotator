@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AnnotationDocument } from '../src/shared/annotation'
 import { ANNOTATION_VERSION } from '../src/shared/annotation'
 import { AnnotatorHostError, loadAnnotation, saveAnnotation } from '../src/client/host-api'
+import { defined } from './dom'
 
 /** One call the stub fetch was handed. */
 interface Call {
@@ -138,5 +139,31 @@ describe('writing an annotation', () => {
     stubFetch({ ok: true }, 500)
     await expect(saveAnnotation('dsh-resource://file/session/s1/fig1.svg', document_))
       .rejects.toThrow('annotation save failed with status 500')
+  })
+})
+
+describe('reading one page of a paged document', () => {
+  it('names the page in the query, and leaves it out for a whole figure', async () => {
+    const calls = stubFetch({
+      ok: true,
+      figure: { path: '/w/report.pdf', mediaType: 'application/pdf', sha256: 'c'.repeat(64) },
+      annotation: null,
+    })
+    await loadAnnotation('dsh-resource://file/session/s1/report.pdf', new AbortController().signal, 3)
+    expect(calls[0]?.url).toContain('page=3')
+    await loadAnnotation('dsh-resource://file/session/s1/report.pdf', new AbortController().signal)
+    expect(calls[1]?.url).not.toContain('page=')
+  })
+
+  it('round-trips an address that carries the characters a query would mangle', async () => {
+    const calls = stubFetch({
+      ok: true,
+      figure: { path: '/w/fig+1.svg', mediaType: 'image/svg+xml', sha256: 'c'.repeat(64) },
+      annotation: null,
+    })
+    const address = 'dsh-resource://file/session/s1/fig+1%20a.svg'
+    const loaded = await loadAnnotation(address, new AbortController().signal)
+    expect(loaded.path).toBe('/w/fig+1.svg')
+    expect(new URL(defined(calls[0]?.url), 'http://localhost').searchParams.get('address')).toBe(address)
   })
 })

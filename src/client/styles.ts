@@ -30,6 +30,8 @@ export const STYLES = `
 .da-overlay[data-tool="select"]{cursor:default}
 .da-overlay[data-tool="text"]{cursor:text}
 .da-overlay:not([data-tool="select"]){cursor:crosshair}
+.da-page{font-size:12px;min-width:44px;text-align:center;color:var(--dsw-alias-text-l2,rgba(200,200,200,.9))}
+.da-pdf{height:100%;min-height:0}
 .da-note{position:relative;flex:0 0 auto;display:flex;gap:6px;align-items:flex-end;padding:8px;border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.28));background:var(--dsw-alias-bg-l2,rgba(127,127,127,.08))}
 .da-note textarea{flex:1;min-height:44px;max-height:120px;resize:vertical;border:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.28));border-radius:6px;background:var(--dsw-alias-bg-l1,transparent);color:inherit;font:inherit;font-size:12px;padding:4px 6px}
 .da-marks{flex:0 0 auto;max-height:132px;overflow:auto;padding:4px 8px;border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.22));font-size:12px}

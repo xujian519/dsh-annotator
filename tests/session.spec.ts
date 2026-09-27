@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AnnotationDocument } from '../src/shared/annotation'
 import { ANNOTATION_VERSION } from '../src/shared/annotation'
-import { deliverAnnotation, type SessionsLike } from '../src/client/session'
+import { buildAnnotationMessage, deliverAnnotation, type SessionsLike } from '../src/client/session'
 
 const document_: AnnotationDocument = {
   version: ANNOTATION_VERSION,
@@ -135,5 +135,24 @@ describe('delivering an annotation', () => {
     } as unknown as SessionsLike
     await expect(deliverAnnotation(sessions, 's1', document_, paths, undefined, 'zh'))
       .rejects.toThrow('the session refused the annotation message')
+  })
+})
+
+describe('one page of a paged document', () => {
+  const pageDocument: AnnotationDocument = {
+    ...document_,
+    figure: { ...document_.figure, mediaType: 'application/pdf', path: '/w/report.pdf', page: 3, pageCount: 12 },
+  }
+
+  it('says which page the marks belong to, in both languages', () => {
+    expect(buildAnnotationMessage(pageDocument, paths, 'zh')).toContain('（第 3 页/共 12 页，图面 10×10')
+    expect(buildAnnotationMessage(pageDocument, paths, 'en')).toContain('(page 3 of 12, figure 10x10')
+  })
+
+  it('names the annotated image after the page it flattened', async () => {
+    const stub = stubSessions()
+    await deliverAnnotation(stub.sessions, 's1', pageDocument, paths, new Blob([new Uint8Array([1])]), 'zh')
+    const image = stub.prompts[0]?.find(part => part.type === 'image')
+    expect(image?.name).toBe('report.pdf.p3.annotated.png')
   })
 })

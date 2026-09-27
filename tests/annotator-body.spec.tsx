@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AnnotationDocument } from '../src/shared/annotation'
 import { ANNOTATION_VERSION } from '../src/shared/annotation'
-import { AnnotatorBody, type AnnotatorBodyProps } from '../src/client/AnnotatorBody'
+import { AnnotatorBody, type AnnotatorBodyProps, type PageSurface, type SurfaceDraft } from '../src/client/AnnotatorBody'
 import { en, zh } from '../src/client/locales'
 import type { SessionsLike } from '../src/client/session'
 import { defined, stubRasterizer, stubRect } from './dom'
@@ -666,5 +666,129 @@ describe('saving', () => {
     mounted = await svgBody({ annotation: saved, saveThrows: 'the socket died' })
     await click(button(document.body, zh.save))
     expect(document.body.textContent).toContain(`${zh.saveError}the socket died`)
+  })
+})
+
+describe('a page supplied by its renderer', () => {
+  const PAGE_ADDRESS = 'dsh-resource://file/session/s1/report.pdf'
+  const PAGE_IMAGE = 'data:image/png;base64,cGFnZTI='
+
+  /** One page of a five-page document, as the PDF half supplies it. */
+  function pageSurface(page = 2, goTo?: (next: number) => void): PageSurface {
+    return {
+      page,
+      pageCount: 5,
+      source: { dataUrl: PAGE_IMAGE, width: 595, height: 842 },
+      ...(goTo === undefined ? {} : { goTo }),
+    }
+  }
+
+  /** The host answer for a page of a PDF. */
+  function pageHost(annotation: AnnotationDocument | null = null): unknown {
+    return {
+      ok: true,
+      figure: { path: '/w/report.pdf', mediaType: 'application/pdf', sha256: 'd'.repeat(64) },
+      annotation,
+    }
+  }
+
+  /** Mount the body over a page, with no file bytes of its own. */
+  async function mountPage(
+    props: Partial<AnnotatorBodyProps> = {},
+    answers: { readonly annotation?: AnnotationDocument | null } = {},
+  ): Promise<Call[]> {
+    // The page's read carries a page number, so this spec answers by shape
+    // rather than through the whole-figure answers the other cases use.
+    const calls: Call[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, init })
+      if (init?.method === 'POST') {
+        return { json: async () => ({ ok: true, annotationPath: '/w/report.p2.annot.json', annotatedImagePath: null }), status: 200 }
+      }
+      return { json: async () => pageHost(answers.annotation ?? null), status: 200 }
+    }))
+    mounted = await mountBody({
+      page: pageSurface(),
+      resourceAddress: PAGE_ADDRESS,
+      ...props,
+    })
+    return calls
+  }
+
+  it('annotates the supplied page rather than the file bytes', async () => {
+    const calls = await mountPage()
+    expect(calls[0]?.url).toContain('page=2')
+    const image = defined(document.body.querySelector('img.da-figure'))
+    expect(image.getAttribute('src')).toBe(PAGE_IMAGE)
+    // The page's own unit size is the coordinate space, not the bitmap's pixels.
+    expect(image.getAttribute('width')).toBe('595')
+    expect(document.body.textContent).toContain('2 / 5')
+    expect(document.body.textContent).not.toContain(zh.loading)
+  })
+
+  it('pages through the document and disables the ends', async () => {
+    const visited: number[] = []
+    await mountPage({ page: pageSurface(2, (next) => { visited.push(next) }) })
+    await click(button(document.body, zh.nextPage))
+    await click(button(document.body, zh.previousPage))
+    expect(visited).toEqual([3, 1])
+  })
+
+  it('offers no navigation the renderer does not implement', async () => {
+    await mountPage()
+    expect(button(document.body, zh.nextPage).disabled).toBe(true)
+    expect(button(document.body, zh.previousPage).disabled).toBe(true)
+  })
+
+  it('saves the page number with the marks', async () => {
+    const calls = await mountPage()
+    await click(button(document.body, zh.annotate))
+    await drawArrow(document.body)
+    await click(button(document.body, zh.save))
+    const post = defined(calls.find(call => call.init?.method === 'POST'))
+    const body = postBody(post) as { annotation?: { figure?: Record<string, unknown> } }
+    expect(body.annotation?.figure).toMatchObject({ page: 2, pageCount: 5, width: 595, height: 842, mediaType: 'application/pdf' })
+  })
+
+  it('seeds unsaved edits from the draft and reports every edit back', async () => {
+    const drafts: SurfaceDraft[] = []
+    await mountPage({
+      draft: {
+        marks: [{ id: 'd1', kind: 'rect', color: '#2f9e44', points: [[10, 10], [40, 40]] }],
+        summary: '半句说明',
+      },
+      onDraftChange: (draft) => { drafts.push(draft) },
+    })
+    await click(button(document.body, zh.annotate))
+    expect(document.body.textContent).toContain('半句说明')
+    await drawArrow(document.body)
+    const last = defined(drafts[drafts.length - 1])
+    expect(last.marks).toHaveLength(2)
+    expect(last.summary).toBe('半句说明')
+  })
+
+  it('keeps the saved marks and note over the draft', async () => {
+    const savedForPage: AnnotationDocument = {
+      ...saved,
+      figure: { ...saved.figure, mediaType: 'application/pdf', path: '/w/report.pdf', page: 2, pageCount: 5 },
+      summary: '已保存的说明',
+    }
+    await mountPage({
+      draft: { marks: [], summary: '草稿说明' },
+    }, { annotation: savedForPage })
+    await click(button(document.body, zh.annotate))
+    expect(document.body.textContent).toContain('已保存的说明')
+    expect(document.body.textContent).not.toContain('草稿说明')
+  })
+
+  it('keeps the draft note when the saved document has none', async () => {
+    const savedForPage = {
+      ...saved,
+      figure: { ...saved.figure, mediaType: 'application/pdf', path: '/w/report.pdf', page: 2, pageCount: 5 },
+    }
+    delete (savedForPage as { summary?: string }).summary
+    await mountPage({ draft: { marks: [], summary: '草稿说明' } }, { annotation: savedForPage })
+    await click(button(document.body, zh.annotate))
+    expect(document.body.textContent).toContain('草稿说明')
   })
 })

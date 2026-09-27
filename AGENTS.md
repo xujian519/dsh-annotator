@@ -13,20 +13,22 @@ DSH（DeepSeek Harness）第三方插件包，一个 npm 包、两个半：
 | 半边 | 入口 | 产物 | 运行环境 |
 |---|---|---|---|
 | Host | `src/index.ts` | `lib/index.js`（ESM） | Node，注册 HTTP 路由 + 智能体系统提示段 |
-| Client | `src/client/index.tsx` | `lib/client.js`（单文件 CJS） | 浏览器，注册文档预览器与标注画布 |
+| Client | `src/client/index.tsx` | `lib/client.js`（单文件 CJS）+ `lib/client.pdf.js`（懒加载分块） | 浏览器，注册文档预览器与标注画布 |
 
-`src/shared/` 是两半共用的纯逻辑。数据模型与侧车格式见 `src/shared/annotation.ts`、`src/host/sidecar.ts`。
+`src/shared/` 是两半共用的纯逻辑。数据模型与侧车格式见 `src/shared/annotation.ts`、`src/host/sidecar.ts`。可标注类型：图片（PNG/JPEG/WebP/BMP/GIF/ICO）、SVG、PDF。
 
 ## 2. 不可违反的架构约束
 
 **先读这一节再写代码。**
 
 1. **Client 半边必须符合 DSH 动态客户端契约**：单文件 CJS；唯一副作用是 `window.__ModuleLoader__.load({id, factory})`；只允许 `react` / `react/jsx-runtime` / `react-dom` / `react-dom/client` 走 shell 的模块表，其余依赖全部内联（插件路由发不了字体等静态资产）。构建契约在 `tsdown.config.ts` 的 `CLIENT_EXTERNALS` 与 `outputOptions.banner`。
-2. **唯一的写入面是两个侧车文件**。标注绝不修改被标注的文档；写入路径一律由 `sidecarPaths()` 从文档路径推导（`<名含扩展名>.annot.json`、`<名含扩展名>.annotated.png`），不接受调用方传入目标路径。读回走 `annotationCandidates()`：新名字优先，旧的主名名字只作回退，且文档必须指向当前文件（`annotationTargetsFigure()`）才被采用。
+2. **唯一的写入面是两个侧车文件**。标注绝不修改被标注的文档；写入路径一律由 `sidecarPaths()` 从文档路径推导（`<名含扩展名>.annot.json`、`<名含扩展名>.annotated.png`，分页再加 `.pN`），不接受调用方传入目标路径。读回走 `annotationCandidates()`：新名字优先，旧的主名名字只作回退，且文档必须指向当前文件（`annotationTargetsFigure()`）才被采用。
 3. **插件路由自带守卫**。路由在 `/api` 之外，必须校验 `x-dsh-annotator` 请求头（再加 `Sec-Fetch-Site` 同源检查）；Client 与 Host 两侧的头名/前缀必须逐字一致（`src/host/routes.ts` ↔ `src/client/host-api.ts`）。
 4. **注册即效应**。一切注册走 `ctx.effect()` / `ctx.inject()`，让卸载可逆；不要留下裸的 `addEventListener` 或全局可变态。
 5. **边界 JSON 必须校验**。Host 收到的请求体一律经 `readAnnotationDocument()`（`src/host/store.ts`）校验后才能落盘，不做裸断言。
 6. **误配置响亮失败**。两半都把自己的协作者当硬依赖：`inject` 声明 + `apply()` 里逐项检查，缺任何一个就抛 `missingService()`（`src/missing-service.ts`），绝不静默挂半个插件。没有例外。
+7. **懒加载分块不得与主包共享模块**。模块加载器的 `require` 只解析模块表与已注册的分块，解析不了兄弟文件；一旦共享，主包就会静态 `require` 一个它拿不到的文件。构建期 `generateBundle` 拦住任何非入口、非动态入口的分块（`tsdown.config.ts`）。分块要用的主包能力（组件、已解析的字典）一律当 prop 传进去。
+8. **重依赖只住在分块里**。PDF.js 及其数据只被 `src/client/pdf/` 引用，主包只能通过 `require.async("./client.pdf.js")` 触及它；分块内的 worker 与 cmap/字体/wasm 由构建期内联，运行时不得触网。分块内 PDF.js 版本必须与 shell 自有 PDF 预览同版（当前 6.3.289）。
 
 ## 3. 三个门禁
 
@@ -67,6 +69,8 @@ pnpm run test:coverage  # 门禁 3
 | `coverage-contract.spec.ts` | `perFile` 为 true 且四项阈值都是 100；`include` 未被收窄；`check` 仍串起三个门禁 |
 
 **改任何门禁时按三步走**：引入一个回归 → 确认它变红 → 回退。覆盖率门禁的这一趟已按此法验证过（见 `docs/notes/implemented/2026-09-28-coverage-100-percent.md`）。
+
+构建还有第四条门禁（不在 `tests/gates/` 里，因为它只在打包时存在）：**分块不得与主包共享模块**。证明方式是三步走里最便宜的一种——让分块 import 一个主包模块（例如给 `PdfBody` 加一句 `import { zh } from '../locales'` 并真实使用），跑 `npx tsdown`，必须看到 `client bundle: client.locales.js is a shared chunk` 且构建非零退出；删掉即恢复两个产物。这趟已跑过（见 `docs/notes/implemented/2026-09-28-pdf-annotation-in-a-lazy-chunk.md`）。
 
 ## 5. 覆盖率：每个文件 100%
 
@@ -113,6 +117,8 @@ Status: implemented
 1. 无「注册即效应」的 dispose 断言测试——目前只靠 `ctx.effect` 的写法，没有测试证明卸载后注册真的移除。
 2. CI 只跑单一平台与 Node 22，没有平台矩阵。
 3. 缺陷类清单（正交结果独立上报、Dispose 必须达静止、临时文件私有目录等）尚未成文；本项目目前只有侧车写入这一处用到临时文件 + rename。
+4. **真浏览器验证不在 CI 里**：这次 PDF 渲染链路的端到端验证跑在本机临时脚手架（真实 `lib/` 产物 + 真实宿主路由 + Chromium 151）上，没有进仓、CI 也没有等价物。CI 仍只有 §3 的三个门禁，加上 §4 那条构建门禁。
+5. **PDF 目前是"每页一份批注"**，没有"多页合并成一份带批注的 PDF"；也没有把标注写回 PDF 注释对象（`/Ink`、`/FreeText`、`/Square`）。要做得另立决策。
 
 ## 8. 边界
 
@@ -126,3 +132,5 @@ Status: implemented
 2. **测真实入口**：路由打真 socket，`apply()` 走 stub composition，组件的交互走真实指针 / 键盘 / input 事件。
 3. **验证世界，不是自述**：断言磁盘上读回来的字节、断言子进程的退出码、断言发出去的请求体，而不是被测对象说它成功了。
 4. **`disabled` 是提示，不是判定**：按钮的 `disabled` 只负责视觉反馈，真正的判定必须写在处理函数里，并且能在测试里走到（键盘、程序化调用）。两边都写死同一条件，会让守卫永远不可达——覆盖率门禁会立刻指出这一点。
+5. **桩要与真身同形，尤其是回调**：把"真身会上报的副作用"从桩里省掉，就等于把一类 bug 藏起来。实例：`PdfBody` 曾把 `onDraftChange` 当内联箭头传下去，真身的 effect 依赖它的身份，于是"上报 → setState → 再渲染 → 再上报"变成死循环；jsdom 测试的桩不 setState 所以全绿，直到真浏览器里跑出 `Maximum update depth exceeded`（进程堆爆）。桩的回调要能触发父组件状态，并且要有一条断言钉住回调身份稳定。
+6. **重渲染型的 UI 变更要有一次真浏览器验证**：单元测试用 jsdom 与替身跑逻辑，量不到"真实浏览器里到底渲染出什么"。真机脚手架（本机临时目录，不进仓）加载真实构建产物与真实宿主路由，跑完"打开 PDF → 渲染 → 翻页 → 画标注 → 保存 → 磁盘上出现侧车"这一整条链。
