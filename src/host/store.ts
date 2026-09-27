@@ -1,14 +1,16 @@
 /**
  * Reading and writing one figure's annotation sidecar.
  *
- * The marks file is JSON owned by this plugin; the flattened image is the same
- * marks burned onto the figure. Both are written through a temporary file and a
- * rename, so a reader never observes a half-written document.
+ * The marks file is JSON owned by this plugin; the review artifact is the same
+ * marks applied to the figure (a PNG for a single-surface figure, a copy of the
+ * document carrying native PDF annotations for one that has pages). Both are
+ * written through a temporary file and a rename, so a reader never observes a
+ * half-written document.
  * @module dsh-annotator/host/store
  */
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import {
   ANNOTATION_VERSION,
   ANNOTATION_VERSION_V2,
@@ -19,13 +21,21 @@ import {
   type MarkAnchor,
   type MarkKind,
 } from '../shared/annotation'
-import { annotationCandidates, annotationTargetsFigure, sidecarPaths, type SidecarPaths } from './sidecar'
+import {
+  annotationCandidates,
+  annotationTargetsFigure,
+  figureMediaType,
+  legacyPagePattern,
+  reviewFileExtension,
+  sidecarPaths,
+  type SidecarPaths,
+} from './sidecar'
 
 /** Maximum accepted sidecar size; a document larger than this is not one we wrote. */
 const MAX_ANNOTATION_BYTES = 4 * 1024 * 1024
 
-/** Maximum accepted flattened review image. */
-export const MAX_REVIEW_IMAGE_BYTES = 24 * 1024 * 1024
+/** Maximum accepted flattened review artifact. */
+export const MAX_REVIEW_BYTES = 24 * 1024 * 1024
 
 /** Kinds a mark may declare. */
 const MARK_KINDS: readonly MarkKind[] = ['arrow', 'rect', 'ellipse', 'pen', 'text']
@@ -80,13 +90,35 @@ function readAnchor(value: unknown): MarkAnchor | undefined {
 }
 
 /**
+ * Read one optional positive integer field from the wire.
+ * @param raw - the object as it arrived.
+ * @param field - field name, used in the failure message.
+ * @returns the number, or undefined when the field is absent.
+ * @throws {Error} when the field is present but is not a positive integer.
+ */
+function readPositiveInteger(raw: Record<string, unknown>, field: string): number | undefined {
+  const value = raw[field]
+  if (value === undefined) return undefined
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    throw new Error(`annotation ${field} must be a positive integer`)
+  }
+  return value
+}
+
+/**
  * Validate one mark from the wire.
+ *
+ * A mark names the page it was drawn on exactly when its figure is a paged
+ * document: on a single-surface figure a page number would be a coordinate space
+ * that does not exist, so it is refused rather than ignored.
+ *
  * @param value - candidate mark.
  * @param index - position used in the failure message.
+ * @param figure - the validated figure the mark belongs to.
  * @returns the validated mark.
  * @throws {Error} when a required field is missing or mistyped.
  */
-function readMark(value: unknown, index: number): AnnotationMark {
+function readMark(value: unknown, index: number, figure: { readonly width?: number; readonly pageCount?: number }): AnnotationMark {
   if (typeof value !== 'object' || value === null) throw new Error(`annotation mark ${index} must be an object`)
   const raw = value as Record<string, unknown>
   const kind = raw['kind']
@@ -99,6 +131,13 @@ function readMark(value: unknown, index: number): AnnotationMark {
   if (!Array.isArray(points) || points.length === 0 || !points.every(isPoint)) {
     throw new Error(`annotation mark ${index} needs at least one coordinate pair`)
   }
+  const page = readPositiveInteger(raw, 'page')
+  if (page !== undefined && figure.width !== undefined) {
+    throw new Error(`annotation mark ${index} names a page, but its figure is one surface`)
+  }
+  if (page !== undefined && figure.pageCount !== undefined && page > figure.pageCount) {
+    throw new Error(`annotation mark ${index} is on page ${page} of a ${figure.pageCount}-page document`)
+  }
   const anchor = readAnchor(raw['anchor'])
   return {
     id: raw['id'],
@@ -106,24 +145,9 @@ function readMark(value: unknown, index: number): AnnotationMark {
     color: raw['color'],
     points,
     ...(typeof raw['text'] === 'string' ? { text: raw['text'] } : {}),
+    ...(page === undefined ? {} : { page }),
     ...(anchor === undefined ? {} : { anchor }),
   }
-}
-
-/**
- * Validate one optional page number from the wire.
- * @param raw - the figure object as it arrived.
- * @param field - field name, used in the failure message.
- * @returns the page number, or undefined when the field is absent.
- * @throws {Error} when the field is present but is not a positive integer.
- */
-function readPageNumber(raw: Record<string, unknown>, field: 'page' | 'pageCount'): number | undefined {
-  const value = raw[field]
-  if (value === undefined) return undefined
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
-    throw new Error(`annotation figure ${field} must be a positive integer`)
-  }
-  return value
 }
 
 /**
@@ -146,15 +170,17 @@ export function readAnnotationDocument(value: unknown): AnnotationDocument {
       throw new Error(`annotation figure needs ${field}`)
     }
   }
-  for (const field of ['width', 'height'] as const) {
-    if (typeof figureRaw[field] !== 'number' || !Number.isFinite(figureRaw[field])) {
-      throw new Error(`annotation figure needs a numeric ${field}`)
-    }
+  const width = readSize(figureRaw, 'width')
+  const height = readSize(figureRaw, 'height')
+  if ((width === undefined) !== (height === undefined)) {
+    throw new Error('annotation figure needs both its width and its height, or neither')
   }
-  const page = readPageNumber(figureRaw, 'page')
-  const pageCount = readPageNumber(figureRaw, 'pageCount')
-  if (page !== undefined && pageCount !== undefined && page > pageCount) {
-    throw new Error(`annotation figure page ${page} is outside its ${pageCount} pages`)
+  const pageCount = readPositiveInteger(figureRaw, 'pageCount')
+  if (pageCount !== undefined && width !== undefined) {
+    // A document with pages has no single size, and a single surface has no pages:
+    // a document carrying both would leave a reader guessing which one the mark
+    // coordinates are measured in.
+    throw new Error('annotation figure is a paged document, so it cannot carry width and height')
   }
   const marks = raw['marks']
   if (!Array.isArray(marks)) throw new Error('annotation document needs a marks array')
@@ -165,17 +191,31 @@ export function readAnnotationDocument(value: unknown): AnnotationDocument {
       address: figureRaw['address'] as string,
       path: figureRaw['path'] as string,
       mediaType: figureRaw['mediaType'] as string,
-      width: figureRaw['width'] as number,
-      height: figureRaw['height'] as number,
       sha256: figureRaw['sha256'] as string,
-      ...(page === undefined ? {} : { page }),
+      ...(width !== undefined && height !== undefined ? { width, height } : {}),
       ...(pageCount === undefined ? {} : { pageCount }),
     },
     createdAt: typeof raw['createdAt'] === 'string' ? raw['createdAt'] : updatedAt,
     updatedAt,
-    marks: marks.map(readMark),
+    marks: marks.map((mark, index) => readMark(mark, index, { ...(width === undefined ? {} : { width }), ...(pageCount === undefined ? {} : { pageCount }) })),
     ...(typeof raw['summary'] === 'string' && raw['summary'] !== '' ? { summary: raw['summary'] } : {}),
   }
+}
+
+/**
+ * Read one optional positive size from the wire.
+ * @param raw - the figure object as it arrived.
+ * @param field - field name, used in the failure message.
+ * @returns the size, or undefined when the field is absent.
+ * @throws {Error} when the field is present but is not a positive number.
+ */
+function readSize(raw: Record<string, unknown>, field: 'width' | 'height'): number | undefined {
+  const value = raw[field]
+  if (value === undefined) return undefined
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`annotation figure ${field} must be a positive number`)
+  }
+  return value
 }
 
 /**
@@ -186,15 +226,70 @@ export function readAnnotationDocument(value: unknown): AnnotationDocument {
  * that share a base name would otherwise read each other's marks.
  *
  * @param figurePath - absolute path of the figure.
- * @param page - 1-based page for a paged figure, or undefined for a whole figure.
  * @returns the document, or null when none was stored or it is unreadable.
  */
-export async function readAnnotation(figurePath: string, page?: number): Promise<AnnotationDocument | null> {
-  for (const candidate of annotationCandidates(figurePath, page)) {
+export async function readAnnotation(figurePath: string): Promise<AnnotationDocument | null> {
+  for (const candidate of annotationCandidates(figurePath)) {
     const document = await readSidecar(candidate)
     if (document !== null && annotationTargetsFigure(document, figurePath)) return document
   }
-  return null
+  if (figureMediaType(figurePath) !== 'application/pdf') return null
+  return await readLegacyPages(figurePath)
+}
+
+/**
+ * Restate the per-page sidecars an earlier version wrote as one document.
+ *
+ * That version annotated one page at a time and stored each page as its own file,
+ * so a figure annotated then has no whole-figure sidecar. Reading them merged
+ * keeps those marks visible; the files are left untouched, and the next save
+ * writes the unified name.
+ *
+ * The page count is the highest page found, since the per-page files do not
+ * record it — the browser half replaces it with the document's real count the next
+ * time it saves.
+ *
+ * @param figurePath - absolute path of the figure.
+ * @returns the merged document, or null when no readable page file exists.
+ */
+async function readLegacyPages(figurePath: string): Promise<AnnotationDocument | null> {
+  const directory = dirname(figurePath)
+  const pattern = legacyPagePattern(figurePath)
+  let entries: string[]
+  try {
+    entries = await readdir(directory)
+  } catch {
+    return null
+  }
+  const pages = entries
+    .map(name => ({ name, page: Number(pattern.exec(name)?.[1]) }))
+    .filter(entry => Number.isInteger(entry.page) && entry.page > 0)
+    .sort((left, right) => left.page - right.page)
+  const read: { readonly page: number; readonly document: AnnotationDocument }[] = []
+  for (const entry of pages) {
+    const document = await readSidecar(join(directory, entry.name))
+    if (document !== null && annotationTargetsFigure(document, figurePath)) read.push({ page: entry.page, document })
+  }
+  const first = read[0]
+  if (first === undefined) return null
+  let summary: string | undefined
+  for (const entry of read) {
+    if (entry.document.summary !== undefined) summary = entry.document.summary
+  }
+  return {
+    version: ANNOTATION_VERSION,
+    figure: {
+      address: first.document.figure.address,
+      path: first.document.figure.path,
+      mediaType: first.document.figure.mediaType,
+      sha256: first.document.figure.sha256,
+      pageCount: read.reduce((highest, entry) => Math.max(highest, entry.page), first.page),
+    },
+    createdAt: read.reduce((earliest, entry) => (entry.document.createdAt < earliest ? entry.document.createdAt : earliest), first.document.createdAt),
+    updatedAt: read.reduce((latest, entry) => (entry.document.updatedAt > latest ? entry.document.updatedAt : latest), first.document.updatedAt),
+    marks: read.flatMap(entry => entry.document.marks.map(mark => ({ ...mark, page: entry.page }))),
+    ...(summary === undefined ? {} : { summary }),
+  }
 }
 
 /**
@@ -269,34 +364,46 @@ function bridgeV2Document(raw: Record<string, unknown>): unknown {
   }
 }
 
+/** The flattened artifact written beside the marks, and what it is. */
+export interface ReviewArtifact {
+  /** File kind, which must match what the figure's own suffix calls for. */
+  readonly kind: 'image' | 'pdf'
+  /** Artifact bytes. */
+  readonly bytes: Uint8Array
+}
+
 /** Outcome of one sidecar save. */
 export interface SaveResult {
   /** Sidecar paths the save wrote. */
   readonly paths: SidecarPaths
-  /** Whether a flattened review image was written too. */
-  readonly wroteImage: boolean
+  /** Whether a flattened review artifact was written too. */
+  readonly wroteReview: boolean
 }
 
 /**
- * Write one figure's annotation, and optionally its flattened review image.
+ * Write one figure's annotation, and optionally its flattened review artifact.
  * @param figurePath - absolute path of the annotated figure.
  * @param document - validated document to persist.
- * @param reviewImage - flattened PNG bytes, when the browser exported one.
+ * @param review - the flattened artifact, when the browser exported one.
  * @returns the written paths.
+ * @throws {Error} when the artifact's kind contradicts the figure's own kind.
  */
 export async function writeAnnotation(
   figurePath: string,
   document: AnnotationDocument,
-  reviewImage?: Uint8Array,
+  review?: ReviewArtifact,
 ): Promise<SaveResult> {
-  const paths = sidecarPaths(figurePath, document.figure.page)
+  const paths = sidecarPaths(figurePath)
+  if (review !== undefined && review.kind !== (reviewFileExtension(figurePath) === '.pdf' ? 'pdf' : 'image')) {
+    throw new Error(`a ${reviewFileExtension(figurePath)} review artifact cannot be written from ${review.kind} bytes`)
+  }
   await mkdir(dirname(paths.annotation), { recursive: true })
   const temporary = `${paths.annotation}.tmp-${process.pid}-${Date.now()}`
   await writeFile(temporary, `${JSON.stringify(document, null, 2)}\n`, 'utf8')
   await rename(temporary, paths.annotation)
-  if (reviewImage === undefined) return { paths, wroteImage: false }
-  const imageTemporary = `${paths.annotatedImage}.tmp-${process.pid}-${Date.now()}`
-  await writeFile(imageTemporary, reviewImage)
-  await rename(imageTemporary, paths.annotatedImage)
-  return { paths, wroteImage: true }
+  if (review === undefined) return { paths, wroteReview: false }
+  const reviewTemporary = `${paths.review}.tmp-${process.pid}-${Date.now()}`
+  await writeFile(reviewTemporary, review.bytes)
+  await rename(reviewTemporary, paths.review)
+  return { paths, wroteReview: true }
 }

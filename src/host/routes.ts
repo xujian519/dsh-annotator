@@ -17,11 +17,12 @@ import {
   isFigurePath,
 } from './sidecar'
 import {
-  MAX_REVIEW_IMAGE_BYTES,
+  MAX_REVIEW_BYTES,
   fileDigest,
   readAnnotation,
   readAnnotationDocument,
   writeAnnotation,
+  type ReviewArtifact,
 } from './store'
 
 /** Request header every route requires. */
@@ -31,7 +32,10 @@ export const GUARD_HEADER = 'x-dsh-annotator'
 export const ROUTE_PREFIX = '/dsh-annotator'
 
 /** Largest accepted request body. */
-const MAX_BODY_BYTES = MAX_REVIEW_IMAGE_BYTES * 2
+const MAX_BODY_BYTES = MAX_REVIEW_BYTES * 2
+
+/** First bytes of every PDF file, used to tell one payload from another. */
+const PDF_HEADER = '%PDF-'
 
 /** What the routes need from the plugin. */
 export interface RouteDeps {
@@ -90,16 +94,29 @@ async function resolveTarget(
 }
 
 /**
- * Read the optional page query parameter.
- * @param value - raw query value.
- * @returns the 1-based page, or undefined when the request named none.
- * @throws {Error} when the value is present but is not a positive integer.
+ * Read the one flattened review artifact a save may carry.
+ *
+ * The kind is taken from the payload, and the store refuses a pair that
+ * contradicts the figure's own suffix — so a caller cannot name PNG bytes as the
+ * review of a PDF.
+ *
+ * @param body - parsed request body.
+ * @returns the artifact, or undefined when the save carried none.
+ * @throws {Error} when both payloads are present, or the PDF bytes are not a PDF.
  */
-function readPageParam(value: string | null): number | undefined {
-  if (value === null || value === '') return undefined
-  const page = Number(value)
-  if (!Number.isInteger(page) || page < 1) throw new Error(`page must be a positive integer, got ${value}`)
-  return page
+function readReview(body: Record<string, unknown>): ReviewArtifact | undefined {
+  const image = typeof body['reviewImage'] === 'string' ? body['reviewImage'] : ''
+  const pdf = typeof body['annotatedPdf'] === 'string' ? body['annotatedPdf'] : ''
+  if (image !== '' && pdf !== '') throw new Error('a save carries one review artifact, not both')
+  if (pdf !== '') {
+    const bytes = new Uint8Array(Buffer.from(pdf, 'base64'))
+    if (!Buffer.from(bytes.subarray(0, PDF_HEADER.length)).toString('latin1').startsWith(PDF_HEADER)) {
+      throw new Error('the annotated document is not a PDF')
+    }
+    return { kind: 'pdf', bytes }
+  }
+  if (image !== '') return { kind: 'image', bytes: new Uint8Array(Buffer.from(image, 'base64')) }
+  return undefined
 }
 
 /**
@@ -164,7 +181,6 @@ export function createHandlers(deps: RouteDeps): {
     try {
       if (req.method === 'GET') {
         const address = url.searchParams.get('address') ?? ''
-        const page = readPageParam(url.searchParams.get('page'))
         const resolved = await resolveTarget(address, deps)
         if (!resolved.ok) {
           sendJson(res, 404, { ok: false, error: resolved.message })
@@ -172,7 +188,7 @@ export function createHandlers(deps: RouteDeps): {
         }
         const [sha256, saved] = await Promise.all([
           fileDigest(resolved.target.path),
-          readAnnotation(resolved.target.path, page),
+          readAnnotation(resolved.target.path),
         ])
         sendJson(res, 200, {
           ok: true,
@@ -190,19 +206,16 @@ export function createHandlers(deps: RouteDeps): {
           return
         }
         const document = readAnnotationDocument(body['annotation'])
-        const encoded = body['reviewImage']
-        const reviewImage = typeof encoded === 'string' && encoded !== ''
-          ? new Uint8Array(Buffer.from(encoded, 'base64'))
-          : undefined
-        if (reviewImage !== undefined && reviewImage.byteLength > MAX_REVIEW_IMAGE_BYTES) {
-          sendJson(res, 413, { ok: false, error: 'review image is too large' })
+        const review = readReview(body)
+        if (review !== undefined && review.bytes.byteLength > MAX_REVIEW_BYTES) {
+          sendJson(res, 413, { ok: false, error: 'the review artifact is too large' })
           return
         }
-        const saved = await writeAnnotation(resolved.target.path, document, reviewImage)
+        const saved = await writeAnnotation(resolved.target.path, document, review)
         sendJson(res, 200, {
           ok: true,
           annotationPath: saved.paths.annotation,
-          annotatedImagePath: saved.wroteImage ? saved.paths.annotatedImage : null,
+          reviewPath: saved.wroteReview ? saved.paths.review : null,
         })
         return
       }

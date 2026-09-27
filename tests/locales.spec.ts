@@ -31,4 +31,11 @@ describe('the fallback translator', () => {
   it('answers the key itself when the dictionary has no such copy', () => {
     expect(fallbackTranslate('zh', 'not-a-key')).toBe('not-a-key')
   })
+
+  it('fills the values a string asks for, and leaves the ones it was not given', () => {
+    expect(fallbackTranslate('zh', 'documentScope', { pages: 3, marks: 5 })).toBe('共 3 页 · 5 处批注')
+    expect(fallbackTranslate('en', 'documentScope', { pages: 3, marks: 5 })).toBe('3 pages · 5 marks')
+    expect(fallbackTranslate('zh', 'documentScope', { pages: 3 })).toBe('共 3 页 · {marks} 处批注')
+    expect(fallbackTranslate('zh', 'documentScope')).toBe(zh.documentScope)
+  })
 })

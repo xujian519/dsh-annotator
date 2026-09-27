@@ -31,8 +31,8 @@ export interface LoadedAnnotation {
 export interface SavedAnnotation {
   /** Absolute path of the marks file. */
   readonly annotationPath: string
-  /** Absolute path of the flattened review image, when one was written. */
-  readonly annotatedImagePath: string | null
+  /** Absolute path of the flattened review artifact, when one was written. */
+  readonly reviewPath: string | null
 }
 
 /** Error carrying the Host's own message. */
@@ -47,12 +47,12 @@ export class AnnotatorHostError extends Error {
 }
 
 /**
- * Encode one blob as base64 for the JSON body.
- * @param blob - bytes to encode.
+ * Encode one artifact as base64 for the JSON body.
+ * @param source - bytes, or the blob an export produced.
  * @returns base64 text.
  */
-async function blobToBase64(blob: Blob): Promise<string> {
-  const bytes = new Uint8Array(await blob.arrayBuffer())
+async function toBase64(source: Blob | Uint8Array): Promise<string> {
+  const bytes = source instanceof Uint8Array ? source : new Uint8Array(await source.arrayBuffer())
   let binary = ''
   const chunk = 0x8000
   for (let offset = 0; offset < bytes.length; offset += chunk) {
@@ -65,19 +65,16 @@ async function blobToBase64(blob: Blob): Promise<string> {
  * Read the figure's saved annotation.
  * @param address - the preview tab's file address.
  * @param signal - cancels the request when the tab closes.
- * @param page - 1-based page, when the body annotates one page of a document.
  * @returns the Host's answer.
  * @throws {AnnotatorHostError} when the Host refuses the address.
  */
 export async function loadAnnotation(
   address: string,
   signal: AbortSignal,
-  page?: number,
 ): Promise<LoadedAnnotation> {
   // URLSearchParams round-trips the address exactly, including the `+` and `%`
   // characters a `dsh-resource://` address may carry.
   const query = new URLSearchParams({ address })
-  if (page !== undefined) query.set('page', String(page))
   const url = `${ROUTE_PREFIX}/annotation?${query.toString()}`
   const response = await fetch(url, { headers: { [GUARD_HEADER]: '1' }, signal })
   const body = await response.json() as {
@@ -98,35 +95,43 @@ export async function loadAnnotation(
 }
 
 /**
- * Persist one annotation document and its flattened image.
+ * Persist one annotation document and its flattened review artifact.
+ *
+ * The payload each artifact travels in follows the annotated figure's own kind:
+ * a paged document is reviewed as a PDF and a single surface as a PNG, which is
+ * the pairing the Host writes and the pairing it refuses to mix up.
+ *
  * @param address - the preview tab's file address.
  * @param document - the document to save.
- * @param reviewImage - flattened PNG, when the browser exported one.
+ * @param review - flattened PNG, or the annotated PDF, when the browser exported one.
  * @returns the paths the Host wrote.
  * @throws {AnnotatorHostError} when the Host refuses the write.
  */
 export async function saveAnnotation(
   address: string,
   document: AnnotationDocument,
-  reviewImage?: Blob,
+  review?: Blob | Uint8Array,
 ): Promise<SavedAnnotation> {
+  const paged = document.figure.mediaType === 'application/pdf'
   const response = await fetch(`${ROUTE_PREFIX}/annotation`, {
     method: 'POST',
     headers: { [GUARD_HEADER]: '1', 'content-type': 'application/json' },
     body: JSON.stringify({
       address,
       annotation: document,
-      ...(reviewImage === undefined ? {} : { reviewImage: await blobToBase64(reviewImage) }),
+      ...(review === undefined
+        ? {}
+        : { [paged ? 'annotatedPdf' : 'reviewImage']: await toBase64(review) }),
     }),
   })
   const body = await response.json() as {
     ok?: boolean
     error?: string
     annotationPath?: string
-    annotatedImagePath?: string | null
+    reviewPath?: string | null
   }
   if (body.ok !== true || body.annotationPath === undefined) {
     throw new AnnotatorHostError(body.error ?? `annotation save failed with status ${response.status}`)
   }
-  return { annotationPath: body.annotationPath, annotatedImagePath: body.annotatedImagePath ?? null }
+  return { annotationPath: body.annotationPath, reviewPath: body.reviewPath ?? null }
 }

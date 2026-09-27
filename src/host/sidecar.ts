@@ -1,10 +1,11 @@
 /**
  * Annotation files beside one figure.
  *
- * An annotation never modifies the figure: it is written to a sibling file
- * (`<name>.annot.json` for the marks, `<name>.annotated.png` for the flattened
- * image). A page of a paged document adds its own page to the name
- * (`<name>.p3.annot.json`), so the pages of one PDF stay separate documents.
+ * An annotation never modifies the figure: it is written to sibling files
+ * (`<name>.annot.json` for the marks and `<name>.annotated.png` — or
+ * `<name>.annotated.pdf` for a document that has pages — for the flattened
+ * review artifact). One figure is one document, however many pages it has, so a
+ * paged document's marks share a single sidecar and name their page inside it.
  *
  * The name keeps the figure's own extension (`fig1.svg` → `fig1.svg.annot.json`):
  * `fig1.svg` and `fig1.png` in one directory are two different documents, and marks
@@ -14,37 +15,50 @@
  * @module dsh-annotator/host/sidecar
  */
 import { basename, dirname, extname, join } from 'node:path'
-import { pageFileSuffix, type AnnotationDocument } from '../shared/annotation'
+import type { AnnotationDocument } from '../shared/annotation'
 
 export { FIGURE_EXTENSIONS, figureMediaType, isFigurePath } from '../shared/figure-kind'
 
-/** Suffix appended to a figure's base name for the marks file. */
+/** Suffix appended to a figure's name for the marks file. */
 export const ANNOTATION_SUFFIX = '.annot.json'
 
-/** Suffix appended to a figure's base name for the flattened review image. */
-export const ANNOTATED_IMAGE_SUFFIX = '.annotated.png'
+/** Suffix appended to a figure's name for the flattened review artifact. */
+export const ANNOTATED_SUFFIX = '.annotated'
 
 /** Absolute paths of the two sidecar files belonging to one figure. */
 export interface SidecarPaths {
   /** Marks file: the structured annotation JSON. */
   readonly annotation: string
-  /** Flattened review image: the figure with the marks drawn on it. */
-  readonly annotatedImage: string
+  /** Flattened review artifact: a PNG, or a PDF for a document that has pages. */
+  readonly review: string
 }
 
 /**
  * Resolve one figure's sidecar paths.
  * @param figurePath - absolute path of the annotated figure.
- * @param page - 1-based page for a paged figure, or undefined for a whole figure.
  * @returns the sidecar paths; both live in the figure's own directory.
  */
-export function sidecarPaths(figurePath: string, page?: number): SidecarPaths {
-  const name = `${basename(figurePath)}${pageFileSuffix(page)}`
+export function sidecarPaths(figurePath: string): SidecarPaths {
+  const name = basename(figurePath)
   const directory = dirname(figurePath)
+  const reviewExtension = reviewFileExtension(figurePath)
   return {
     annotation: join(directory, `${name}${ANNOTATION_SUFFIX}`),
-    annotatedImage: join(directory, `${name}${ANNOTATED_IMAGE_SUFFIX}`),
+    review: join(directory, `${name}${ANNOTATED_SUFFIX}${reviewExtension}`),
   }
+}
+
+/**
+ * Suffix of the flattened review artifact for one figure.
+ *
+ * A paged document is reviewed as a document — the page marks travel as native
+ * PDF annotations in a copy of the original — while a single-surface figure is
+ * reviewed as the picture it is.
+ * @param figurePath - absolute path of the annotated figure.
+ * @returns the file extension, dot included.
+ */
+export function reviewFileExtension(figurePath: string): '.pdf' | '.png' {
+  return extname(figurePath).toLowerCase() === '.pdf' ? '.pdf' : '.png'
 }
 
 /**
@@ -52,12 +66,10 @@ export function sidecarPaths(figurePath: string, page?: number): SidecarPaths {
  * the name (`fig1.svg` → `fig1.annot.json`). Read-only: a file an earlier version
  * wrote stays readable, so an existing annotation never disappears on upgrade.
  * @param figurePath - absolute path of the annotated figure.
- * @param page - 1-based page for a paged figure, or undefined for a whole figure.
  * @returns the legacy marks file path beside the figure.
  */
-export function legacyAnnotationPath(figurePath: string, page?: number): string {
-  const name = `${basename(figurePath, extname(figurePath))}${pageFileSuffix(page)}`
-  return join(dirname(figurePath), `${name}${ANNOTATION_SUFFIX}`)
+export function legacyAnnotationPath(figurePath: string): string {
+  return join(dirname(figurePath), `${basename(figurePath, extname(figurePath))}${ANNOTATION_SUFFIX}`)
 }
 
 /**
@@ -65,13 +77,35 @@ export function legacyAnnotationPath(figurePath: string, page?: number): string 
  * then the legacy one. A figure whose name carries no extension derives both from
  * the same name, so the list is deduplicated.
  * @param figurePath - absolute path of the annotated figure.
- * @param page - 1-based page for a paged figure, or undefined for a whole figure.
  * @returns the candidate marks file paths.
  */
-export function annotationCandidates(figurePath: string, page?: number): readonly string[] {
-  const current = sidecarPaths(figurePath, page).annotation
-  const legacy = legacyAnnotationPath(figurePath, page)
+export function annotationCandidates(figurePath: string): readonly string[] {
+  const current = sidecarPaths(figurePath).annotation
+  const legacy = legacyAnnotationPath(figurePath)
   return current === legacy ? [current] : [current, legacy]
+}
+
+/**
+ * Name pattern of the one-page-per-file sidecars this plugin wrote before a paged
+ * document became a single annotation.
+ *
+ * Both spellings are matched — the extension-bearing name
+ * (`fig1.pdf.p2.annot.json`) and the base-name one an even earlier version wrote
+ * (`fig1.p2.annot.json`) — and the page number is the pattern's first group.
+ *
+ * @param figurePath - absolute path of the annotated figure.
+ * @returns an anchored, case-insensitive pattern over one directory entry's name.
+ */
+export function legacyPagePattern(figurePath: string): RegExp {
+  const extension = extname(figurePath)
+  const names = new Set([basename(figurePath), basename(figurePath, extension)])
+  const alternatives = [...names].map(escapeForRegExp).join('|')
+  return new RegExp(`^(?:${alternatives})\\.p(\\d+)${escapeForRegExp(ANNOTATION_SUFFIX)}$`, 'iu')
+}
+
+/** Escape one literal so it matches itself inside a regular expression. */
+function escapeForRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
 }
 
 /**

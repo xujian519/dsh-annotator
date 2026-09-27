@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseFileAddress } from '../src/shared/address'
 import { figureMediaType, isFigurePath, suffixOf } from '../src/shared/figure-kind'
-import { annotationCandidates, legacyAnnotationPath, sidecarPaths } from '../src/host/sidecar'
+import { annotationCandidates, legacyAnnotationPath, legacyPagePattern, sidecarPaths } from '../src/host/sidecar'
 import { resolveSessionCwd } from '../src/host/session-cwd'
 
 describe('file addresses', () => {
@@ -78,7 +78,7 @@ describe('sidecar paths', () => {
   it('derives both sibling files from the figure name, extension included', () => {
     expect(sidecarPaths('/w/figures/fig1.svg')).toEqual({
       annotation: '/w/figures/fig1.svg.annot.json',
-      annotatedImage: '/w/figures/fig1.svg.annotated.png',
+      review: '/w/figures/fig1.svg.annotated.png',
     })
   })
 
@@ -86,16 +86,17 @@ describe('sidecar paths', () => {
     expect(sidecarPaths('/w/图 1.a.svg').annotation).toBe('/w/图 1.a.svg.annot.json')
   })
 
-  it('names one page of a paged document after that page', () => {
-    expect(sidecarPaths('/w/figures/report.pdf', 3)).toEqual({
-      annotation: '/w/figures/report.pdf.p3.annot.json',
-      annotatedImage: '/w/figures/report.pdf.p3.annotated.png',
+  it('reviews a paged document as a document, and one surface as a picture', () => {
+    expect(sidecarPaths('/w/figures/report.pdf')).toEqual({
+      annotation: '/w/figures/report.pdf.annot.json',
+      review: '/w/figures/report.pdf.annotated.pdf',
     })
+    expect(sidecarPaths('/w/figures/REPORT.PDF').review).toBe('/w/figures/REPORT.PDF.annotated.pdf')
   })
 
   it('still names the marks file earlier versions derived from the base name', () => {
     expect(legacyAnnotationPath('/w/figures/fig1.svg')).toBe('/w/figures/fig1.annot.json')
-    expect(legacyAnnotationPath('/w/figures/report.pdf', 3)).toBe('/w/figures/report.p3.annot.json')
+    expect(legacyAnnotationPath('/w/figures/report.pdf')).toBe('/w/figures/report.annot.json')
   })
 
   it('offers the legacy name only as a fallback, and deduplicates a name without extension', () => {
@@ -104,6 +105,17 @@ describe('sidecar paths', () => {
       '/w/figures/fig1.annot.json',
     ])
     expect(annotationCandidates('/w/Makefile')).toEqual(['/w/Makefile.annot.json'])
+  })
+
+  it('recognizes the one-page-per-file sidecars an earlier version wrote, in both spellings', () => {
+    const pattern = legacyPagePattern('/w/figures/report.pdf')
+    expect(pattern.exec('report.pdf.p3.annot.json')?.[1]).toBe('3')
+    expect(pattern.exec('report.p12.annot.json')?.[1]).toBe('12')
+    expect(pattern.exec('report.pdf.annot.json')).toBeNull()
+    expect(pattern.exec('other.pdf.p3.annot.json')).toBeNull()
+    expect(pattern.exec('report.pdf.pX.annot.json')).toBeNull()
+    // A name without a suffix has one spelling, not two.
+    expect(legacyPagePattern('/w/Makefile').exec('Makefile.p2.annot.json')?.[1]).toBe('2')
   })
 })
 

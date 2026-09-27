@@ -17,11 +17,12 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { AnnotatorBody } from './AnnotatorBody'
 import type { AnnotatorInjected } from './AnnotatorBody'
+import { createDocumentSeat } from './document-seat'
 import { LazyPdfBody } from './LazyPdfBody'
 import { NAMESPACE, en, zh } from './locales'
 import { missingService } from '../missing-service'
 import type { PdfBodyInjected } from './pdf/PdfBody'
-import type { SessionsLike } from './session'
+import type { FileUploadLike, SessionsLike } from './session'
 
 /** Plugin name reported to the client module loader. */
 export const name = 'dsh-annotator-client'
@@ -121,13 +122,17 @@ export function apply(ctx: Context): void {
     name: 'sidebar.right.tab.document',
     key: PDF_BODY_ID,
     locale: NAMESPACE,
-    // The chunk cannot import its own package's entry bundle, so the annotator
-    // body it renders each page with crosses as an injected prop.
+    // The chunk cannot import its own package's entry bundle, so the annotator body
+    // it renders each page with, and the seat that reads, writes and delivers the
+    // document's one annotation, cross as injected props.
     inject: (sessionId: unknown): PdfBodyInjected => ({
-      sessions: ctx.get('sessions') as SessionsLike | undefined,
-      sessionId: String(sessionId),
-      localeId: locale.getLocale().locale ?? 'zh',
       AnnotatorBody,
+      seat: createDocumentSeat({
+        sessions: ctx.get('sessions') as SessionsLike | undefined,
+        fileUpload: ctx.get('fileUpload') as FileUploadLike | undefined,
+        sessionId: String(sessionId),
+        locale: locale.getLocale().locale?.startsWith('en') === true ? 'en' : 'zh',
+      }),
     }),
   }, LazyPdfBody)), 'dsh-annotator: pdf document body')
 }

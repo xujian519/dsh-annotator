@@ -13,22 +13,25 @@ DSH（DeepSeek Harness）第三方插件包，一个 npm 包、两个半：
 | 半边 | 入口 | 产物 | 运行环境 |
 |---|---|---|---|
 | Host | `src/index.ts` | `lib/index.js`（ESM） | Node，注册 HTTP 路由 + 智能体系统提示段 |
-| Client | `src/client/index.tsx` | `lib/client.js`（单文件 CJS）+ `lib/client.pdf.js`（懒加载分块） | 浏览器，注册文档预览器与标注画布 |
+| Client | `src/client/index.tsx` | `lib/client.js`（单文件 CJS）+ `lib/client.pdf.js`（懒加载分块，含 PDF.js 与 pdf-lib） | 浏览器，注册文档预览器与标注画布 |
 
 `src/shared/` 是两半共用的纯逻辑。数据模型与侧车格式见 `src/shared/annotation.ts`、`src/host/sidecar.ts`。可标注类型：图片（PNG/JPEG/WebP/BMP/GIF/ICO）、SVG、PDF。
+
+PDF 是**整份文档一份标注**：`figure.pageCount` 记页数，每条 mark 用 `page` 记自己在第几页，坐标以那一页的页面单位（PDF 点）计；保存时浏览器半边把标注写成**原生 PDF 注释对象**（`/Ink` `/Square` `/Circle` `/Line` `/FreeText`，各自带自绘外观流）并写出一份 `<名>.annotated.pdf`，会话收到的是这一份副本作为附件（外加每页的标注位图与文本清单）。分块内代码分布：`pdf/runtime.ts`（PDF.js 接缝与每页视口变换）、`pdf/annotate.ts`（pdf-lib 写入器）、`pdf/PdfBody.tsx`（文档级控制器）。
 
 ## 2. 不可违反的架构约束
 
 **先读这一节再写代码。**
 
 1. **Client 半边必须符合 DSH 动态客户端契约**：单文件 CJS；唯一副作用是 `window.__ModuleLoader__.load({id, factory})`；只允许 `react` / `react/jsx-runtime` / `react-dom` / `react-dom/client` 走 shell 的模块表，其余依赖全部内联（插件路由发不了字体等静态资产）。构建契约在 `tsdown.config.ts` 的 `CLIENT_EXTERNALS` 与 `outputOptions.banner`。
-2. **唯一的写入面是两个侧车文件**。标注绝不修改被标注的文档；写入路径一律由 `sidecarPaths()` 从文档路径推导（`<名含扩展名>.annot.json`、`<名含扩展名>.annotated.png`，分页再加 `.pN`），不接受调用方传入目标路径。读回走 `annotationCandidates()`：新名字优先，旧的主名名字只作回退，且文档必须指向当前文件（`annotationTargetsFigure()`）才被采用。
+2. **唯一的写入面是两个侧车文件**。标注绝不修改被标注的文档；写入路径一律由 `sidecarPaths()` 从文档路径推导（`<名含扩展名>.annot.json`，以及 `<名含扩展名>.annotated.png`／PDF 的 `.annotated.pdf`），不接受调用方传入目标路径；写入的产物种类必须与文档自身类型一致（`writeAnnotation()` 会拒绝错配）。读回走 `annotationCandidates()`：新名字优先，旧的主名名字只作回退，且文档必须指向当前文件（`annotationTargetsFigure()`）才被采用；PDF 在没有统一侧车时还会把上一版"每页一份"的文件读成一份文档（`readLegacyPages()`），只读不删。
 3. **插件路由自带守卫**。路由在 `/api` 之外，必须校验 `x-dsh-annotator` 请求头（再加 `Sec-Fetch-Site` 同源检查）；Client 与 Host 两侧的头名/前缀必须逐字一致（`src/host/routes.ts` ↔ `src/client/host-api.ts`）。
 4. **注册即效应**。一切注册走 `ctx.effect()` / `ctx.inject()`，让卸载可逆；不要留下裸的 `addEventListener` 或全局可变态。
 5. **边界 JSON 必须校验**。Host 收到的请求体一律经 `readAnnotationDocument()`（`src/host/store.ts`）校验后才能落盘，不做裸断言。
 6. **误配置响亮失败**。两半都把自己的协作者当硬依赖：`inject` 声明 + `apply()` 里逐项检查，缺任何一个就抛 `missingService()`（`src/missing-service.ts`），绝不静默挂半个插件。没有例外。
-7. **懒加载分块不得与主包共享模块**。模块加载器的 `require` 只解析模块表与已注册的分块，解析不了兄弟文件；一旦共享，主包就会静态 `require` 一个它拿不到的文件。构建期 `generateBundle` 拦住任何非入口、非动态入口的分块（`tsdown.config.ts`）。分块要用的主包能力（组件、已解析的字典）一律当 prop 传进去。
-8. **重依赖只住在分块里**。PDF.js 及其数据只被 `src/client/pdf/` 引用，主包只能通过 `require.async("./client.pdf.js")` 触及它；分块内的 worker 与 cmap/字体/wasm 由构建期内联，运行时不得触网。分块内 PDF.js 版本必须与 shell 自有 PDF 预览同版（当前 6.3.289）。
+7. **懒加载分块不得与主包共享模块**。模块加载器的 `require` 只解析模块表与已注册的分块，解析不了兄弟文件；一旦共享，主包就会静态 `require` 一个它拿不到的文件。构建期 `generateBundle` 拦住任何非入口、非动态入口的分块（`tsdown.config.ts`）。分块要用的主包能力（组件、函数、已解析的字典）一律当 prop 传进去——PDF 正文的 `AnnotatorBody` 与"文档座位"（`DocumentSeat`：读、存、投递）就是这么过界的。
+8. **分块只能经 `require.async` 加载**。除了动态导入那一条调用，入口里不允许出现任何指向分块的同步 `require` 或别名引用。rolldown 在分块的依赖图看起来有副作用时会额外插一条**急切**的 `require("./client.x.js")`（引入 pdf-lib 时就真的出现了）——浏览器工厂解析不了它，构建插件会把它剥掉并断言没有残留（`asyncChunkRequire()`）。分块的运行时代码只能引用 shell 的模块表（`react` 等）与它自己 bundle 进来的代码。
+9. **重依赖只住在分块里**。PDF.js、pdf-lib 及其数据只被 `src/client/pdf/` 引用，主包只能通过 `require.async("./client.pdf.js")` 触及它；分块内的 worker、cmap/字体/wasm 由构建期内联，运行时不得触网。分块内 PDF.js 版本必须与 shell 自有 PDF 预览同版（当前 6.3.289）。分块打包的每个第三方包（PDF.js、pdf-lib、pako 等）的许可证都由构建期写进分块 banner，缺一份就让构建失败。
 
 ## 3. 三个门禁
 
@@ -70,7 +73,14 @@ pnpm run test:coverage  # 门禁 3
 
 **改任何门禁时按三步走**：引入一个回归 → 确认它变红 → 回退。覆盖率门禁的这一趟已按此法验证过（见 `docs/notes/implemented/2026-09-28-coverage-100-percent.md`）。
 
-构建还有第四条门禁（不在 `tests/gates/` 里，因为它只在打包时存在）：**分块不得与主包共享模块**。证明方式是三步走里最便宜的一种——让分块 import 一个主包模块（例如给 `PdfBody` 加一句 `import { zh } from '../locales'` 并真实使用），跑 `npx tsdown`，必须看到 `client bundle: client.locales.js is a shared chunk` 且构建非零退出；删掉即恢复两个产物。这趟已跑过（见 `docs/notes/implemented/2026-09-28-pdf-annotation-in-a-lazy-chunk.md`）。
+构建还有第四条门禁（不在 `tests/gates/` 里，因为它只在打包时存在）：**分块只能异步加载，且不得与主包共享模块**。两条证明都是"引入回归 → 变红 → 回退"：
+
+| 回归 | 期望的失败 |
+|---|---|
+| 让分块 import 一个主包模块（例如给 `PdfBody` 加一句 `import { zh } from '../locales'` 并真实使用） | `client bundle: client.locales.js is a shared chunk`，构建非零退出 |
+| 让入口与分块出现同步引用（例如把 `LazyPdfBody` 的 `import()` 改成顶层 `require` 等价写法，或让 `asyncChunkRequire()` 不再剥离急切 preload） | `client bundle: require('./client.pdf.js') would not resolve in the browser` 或 `has no generated import expression`，构建非零退出 |
+
+第一条已跑过（见 `docs/notes/implemented/2026-09-28-pdf-annotation-in-a-lazy-chunk.md`）；第二条是引入 pdf-lib 时真实撞上的回归，剥离逻辑与残留断言见 `docs/notes/implemented/2026-09-28-pdf-annotated-as-one-document.md`。
 
 ## 5. 覆盖率：每个文件 100%
 
@@ -118,7 +128,7 @@ Status: implemented
 2. CI 只跑单一平台与 Node 22，没有平台矩阵。
 3. 缺陷类清单（正交结果独立上报、Dispose 必须达静止、临时文件私有目录等）尚未成文；本项目目前只有侧车写入这一处用到临时文件 + rename。
 4. **真浏览器验证不在 CI 里**：这次 PDF 渲染链路的端到端验证跑在本机临时脚手架（真实 `lib/` 产物 + 真实宿主路由 + Chromium 151）上，没有进仓、CI 也没有等价物。CI 仍只有 §3 的三个门禁，加上 §4 那条构建门禁。
-5. **PDF 目前是"每页一份批注"**，没有"多页合并成一份带批注的 PDF"；也没有把标注写回 PDF 注释对象（`/Ink`、`/FreeText`、`/Square`）。要做得另立决策。
+5. **PDF 标注不做"烧进页面内容"的副本**，也不在宿主侧从 JSON 重新生成带批注的 PDF（`<名>.annotated.pdf` 完全由浏览器半边在保存时产出）。没有 PDF 文本层与连续滚动：一次一页。
 
 ## 8. 边界
 
@@ -134,3 +144,5 @@ Status: implemented
 4. **`disabled` 是提示，不是判定**：按钮的 `disabled` 只负责视觉反馈，真正的判定必须写在处理函数里，并且能在测试里走到（键盘、程序化调用）。两边都写死同一条件，会让守卫永远不可达——覆盖率门禁会立刻指出这一点。
 5. **桩要与真身同形，尤其是回调**：把"真身会上报的副作用"从桩里省掉，就等于把一类 bug 藏起来。实例：`PdfBody` 曾把 `onDraftChange` 当内联箭头传下去，真身的 effect 依赖它的身份，于是"上报 → setState → 再渲染 → 再上报"变成死循环；jsdom 测试的桩不 setState 所以全绿，直到真浏览器里跑出 `Maximum update depth exceeded`（进程堆爆）。桩的回调要能触发父组件状态，并且要有一条断言钉住回调身份稳定。
 6. **重渲染型的 UI 变更要有一次真浏览器验证**：单元测试用 jsdom 与替身跑逻辑，量不到"真实浏览器里到底渲染出什么"。真机脚手架（本机临时目录，不进仓）加载真实构建产物与真实宿主路由，跑完"打开 PDF → 渲染 → 翻页 → 画标注 → 保存 → 磁盘上出现侧车"这一整条链。
+
+7. **单元测试看不见的失败模式，要在最外层入口上验**：断言产物本身，而不是断言自己的产物看起来对。实例一：构建产物的同步 `require("./client.pdf.js")` 让每个 jsdom 规格都全绿，只有把真实产物交给模块加载器时立刻炸；实例二：外观流里箭头的两条斜边少了 `m`，PDF 结构断言（对象、矩形、颜色）全部通过，只有用独立渲染器（PyMuPDF）画出像素才看得出来。所以验收链是：**独立解析器读结构 + 独立渲染器看图 + 真实浏览器走交互**，三样都过才算完。

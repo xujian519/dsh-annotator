@@ -1,11 +1,12 @@
 /** The browser entry: the three registrations, the injected props, and its failures. */
 import type { Context } from '@deepseek-ai/cordis'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { AnnotatorBody } from '../src/client/AnnotatorBody'
 import { LazyPdfBody } from '../src/client/LazyPdfBody'
 import { BODY_ID, PDF_BODY_ID, apply, inject, name } from '../src/client/index'
 import { NAMESPACE, en, zh } from '../src/client/locales'
 import { missingService } from '../src/missing-service'
+import { defined } from './dom'
 
 /** One renderer definition the stub registry was asked to add. */
 interface StubDefinition {
@@ -140,13 +141,47 @@ describe('browser entry', () => {
     expect(injected).toEqual({ sessions, sessionId: '123', localeId: 'en-US' })
   })
 
-  it('hands the PDF chunk the annotator body it renders each page with', () => {
+  it('hands the PDF chunk the seats it cannot import from this bundle', () => {
     const stub = stubContext()
     apply(stub.ctx)
-    const factory = stub.slots[1]?.options['inject'] as (id: unknown) => { AnnotatorBody: unknown }
-    // The chunk cannot import its own package's entry bundle, so the component
-    // it mounts per page arrives through the injection.
-    expect(factory('s1').AnnotatorBody).toBe(AnnotatorBody)
+    const factory = stub.slots[1]?.options['inject'] as (id: unknown) => { AnnotatorBody: unknown; seat: Record<string, unknown> }
+    // The chunk cannot import its own package's entry bundle, so the component it
+    // mounts per page, and the seat that reads, writes and delivers the document,
+    // arrive through the injection rather than through an import.
+    const injected = factory('s1')
+    expect(injected.AnnotatorBody).toBe(AnnotatorBody)
+    expect(Object.keys(injected.seat).sort()).toEqual(['load', 'save', 'send'])
+  })
+
+  it('builds the seat in the active locale, so a sent document speaks it', async () => {
+    const calls: string[] = []
+    const prompts: unknown[][] = []
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      calls.push(`${init?.method ?? 'GET'} ${url}`)
+      return { json: async () => ({ ok: true, annotationPath: '/w/a.annot.json', reviewPath: null }), status: 200 }
+    })
+    const sessions = {
+      scope: () => ({ live: true }),
+      sessionOf: () => ({ prompt: async (content: readonly unknown[]) => { prompts.push([...content]); return { ok: true } } }),
+    }
+    const stub = stubContext({ localeId: 'en-GB', sessions })
+    apply(stub.ctx)
+    const factory = stub.slots[1]?.options['inject'] as (id: unknown) => { seat: { send: (input: unknown, saved: unknown, pages: unknown, pdf: unknown) => Promise<readonly string[]> } }
+    const seat = factory('s1').seat
+    const document_ = {
+      figure: { address: 'a', path: '/w/report.pdf', mediaType: 'application/pdf', sha256: 'a'.repeat(64), pageCount: 2 },
+      marks: [{ id: 'm1', kind: 'rect', color: '#1971c2', points: [[1, 2], [3, 4]], page: 1 }],
+      summary: '',
+      createdAt: null,
+    }
+    const warnings = await seat.send(document_, { annotationPath: '/w/a.annot.json', reviewPath: null }, [], new Uint8Array([1]))
+    // The seat speaks the locale the slot was mounted under, and the composition
+    // here provides no upload service.
+    expect(warnings).toEqual(['This composition has no upload service, so the annotated PDF was not attached.'])
+    expect(calls).toEqual([])
+    const parts = (prompts[0] ?? []) as { readonly text?: string }[]
+    expect(defined(parts[0]).text).toContain('[figure annotations]')
+    vi.unstubAllGlobals()
   })
 
   it('falls back to Chinese when the locale service reports no active locale', () => {

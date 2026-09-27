@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { GUARD_HEADER, createHandlers } from '../src/host/routes'
-import { MAX_REVIEW_IMAGE_BYTES } from '../src/host/store'
+import { MAX_REVIEW_BYTES } from '../src/host/store'
 import { ANNOTATION_VERSION, ANNOTATION_VERSION_V2 } from '../src/shared/annotation'
 import type { AnnotationDocument } from '../src/shared/annotation'
 
@@ -90,9 +90,9 @@ describe('annotation route', () => {
       body: JSON.stringify({ address, annotation: document_, reviewImage: Buffer.from([9, 9]).toString('base64') }),
     })
     expect(save.status).toBe(200)
-    const saved = await save.json() as { annotationPath: string; annotatedImagePath: string }
+    const saved = await save.json() as { annotationPath: string; reviewPath: string }
     expect(saved.annotationPath).toBe(join(directory, 'fig1.svg.annot.json'))
-    expect(saved.annotatedImagePath).toBe(join(directory, 'fig1.svg.annotated.png'))
+    expect(saved.reviewPath).toBe(join(directory, 'fig1.svg.annotated.png'))
 
     const read = await fetch(`${origin}/dsh-annotator/annotation?address=${encodeURIComponent(address)}`, { headers: guard })
     const loaded = await read.json() as { figure: { sha256: string }; annotation: AnnotationDocument }
@@ -151,7 +151,7 @@ describe('annotation route', () => {
   })
 })
 
-describe('one page of a paged document', () => {
+describe('a document that has pages', () => {
   const guard = { [GUARD_HEADER]: '1' }
   const reportBytes = '%PDF-1.7\n'
   // The fixture directory only exists once `beforeAll` has run, so these are
@@ -164,49 +164,84 @@ describe('one page of a paged document', () => {
     address = `dsh-resource://file/session/s1//${directory}/report.pdf`
     pageDocument = {
       ...document_,
-      figure: { ...document_.figure, address, path: join(directory, 'report.pdf'), mediaType: 'application/pdf', page: 2, pageCount: 5 },
+      figure: {
+        address,
+        path: join(directory, 'report.pdf'),
+        mediaType: 'application/pdf',
+        sha256: 'c'.repeat(64),
+        pageCount: 5,
+      },
+      marks: [{ id: 'p2', kind: 'rect', color: '#1971c2', points: [[1, 2], [3, 4]], page: 2 }],
     }
   })
 
-  it('writes the page into its own sidecar, named after the figure and the page', async () => {
+  it('writes the whole document into one sidecar, and its annotated copy beside it', async () => {
     const save = await fetch(`${origin}/dsh-annotator/annotation`, {
       method: 'POST',
       headers: { ...guard, 'content-type': 'application/json' },
-      body: JSON.stringify({ address, annotation: pageDocument }),
+      body: JSON.stringify({ address, annotation: pageDocument, annotatedPdf: Buffer.from('%PDF-1.7 annotated').toString('base64') }),
     })
     expect(save.status).toBe(200)
     expect(await save.json()).toMatchObject({
-      annotationPath: join(directory, 'report.pdf.p2.annot.json'),
-      annotatedImagePath: null,
+      annotationPath: join(directory, 'report.pdf.annot.json'),
+      reviewPath: join(directory, 'report.pdf.annotated.pdf'),
     })
-  })
-
-  it('reads the page a request names, and reports none for the whole figure', async () => {
-    await fetch(`${origin}/dsh-annotator/annotation`, {
-      method: 'POST',
-      headers: { ...guard, 'content-type': 'application/json' },
-      body: JSON.stringify({ address, annotation: pageDocument }),
-    })
-    const read = await fetch(`${origin}/dsh-annotator/annotation?address=${encodeURIComponent(address)}&page=2`, { headers: guard })
+    const read = await fetch(`${origin}/dsh-annotator/annotation?address=${encodeURIComponent(address)}`, { headers: guard })
     const loaded = await read.json() as { annotation: AnnotationDocument | null }
-    expect(loaded.annotation?.figure.page).toBe(2)
-    const whole = await fetch(`${origin}/dsh-annotator/annotation?address=${encodeURIComponent(address)}`, { headers: guard })
-    expect((await whole.json() as { annotation: unknown }).annotation).toBeNull()
+    expect(loaded.annotation?.marks).toEqual([{ id: 'p2', kind: 'rect', color: '#1971c2', points: [[1, 2], [3, 4]], page: 2 }])
   })
 
-  it('refuses a page that is not a positive integer, and a page beyond the document', async () => {
-    for (const value of ['0', '-2', 'abc', '1.5']) {
-      const response = await fetch(`${origin}/dsh-annotator/annotation?address=${encodeURIComponent(address)}&page=${value}`, { headers: guard })
-      expect(response.status).toBe(400)
-      expect(await response.json()).toMatchObject({ error: expect.stringContaining('positive integer') as unknown as string })
-    }
+  it('refuses a mark on a page the document does not have', async () => {
     const beyond = await fetch(`${origin}/dsh-annotator/annotation`, {
       method: 'POST',
       headers: { ...guard, 'content-type': 'application/json' },
-      body: JSON.stringify({ address, annotation: { ...pageDocument, figure: { ...pageDocument.figure, page: 9 } } }),
+      body: JSON.stringify({ address, annotation: { ...pageDocument, marks: [{ ...pageDocument.marks[0], page: 9 }] } }),
     })
     expect(beyond.status).toBe(400)
-    expect(await beyond.json()).toMatchObject({ error: expect.stringContaining('outside its 5 pages') as unknown as string })
+    expect(await beyond.json()).toMatchObject({ error: expect.stringContaining('is on page 9 of a 5-page document') as unknown as string })
+  })
+
+  it('refuses a payload that is not a PDF, and a save that carries both artifacts', async () => {
+    const notPdf = await fetch(`${origin}/dsh-annotator/annotation`, {
+      method: 'POST',
+      headers: { ...guard, 'content-type': 'application/json' },
+      body: JSON.stringify({ address, annotation: pageDocument, annotatedPdf: Buffer.from('<html/>').toString('base64') }),
+    })
+    expect(notPdf.status).toBe(400)
+    expect(await notPdf.json()).toMatchObject({ error: 'the annotated document is not a PDF' })
+    const both = await fetch(`${origin}/dsh-annotator/annotation`, {
+      method: 'POST',
+      headers: { ...guard, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        address,
+        annotation: pageDocument,
+        annotatedPdf: Buffer.from('%PDF-1.7').toString('base64'),
+        reviewImage: Buffer.from([1]).toString('base64'),
+      }),
+    })
+    expect(both.status).toBe(400)
+    expect(await both.json()).toMatchObject({ error: 'a save carries one review artifact, not both' })
+  })
+
+  it('reads the per-page sidecars an earlier version wrote as one document', async () => {
+    // An earlier test may have written this document's own sidecar; the per-page
+    // files are what this one is about.
+    await rm(join(directory, 'report.pdf.annot.json'), { force: true })
+    const legacy = (page: number): string => join(directory, `report.pdf.p${page}.annot.json`)
+    await writeFile(legacy(1), JSON.stringify({
+      ...document_,
+      figure: { address, path: join(directory, 'report.pdf'), mediaType: 'application/pdf', width: 595, height: 842, sha256: 'c'.repeat(64) },
+      marks: [{ id: 'old1', kind: 'pen', color: '#2f9e44', points: [[1, 1], [2, 2]] }],
+    }))
+    await writeFile(legacy(3), JSON.stringify({
+      ...document_,
+      figure: { address, path: join(directory, 'report.pdf'), mediaType: 'application/pdf', width: 595, height: 842, sha256: 'c'.repeat(64) },
+      marks: [{ id: 'old3', kind: 'arrow', color: '#e03131', points: [[3, 3], [4, 4]] }],
+    }))
+    const read = await fetch(`${origin}/dsh-annotator/annotation?address=${encodeURIComponent(address)}`, { headers: guard })
+    const loaded = await read.json() as { annotation: AnnotationDocument | null }
+    expect(loaded.annotation?.figure.pageCount).toBe(3)
+    expect(loaded.annotation?.marks.map(mark => [mark.page, mark.id])).toEqual([[1, 'old1'], [3, 'old3']])
   })
 })
 
@@ -323,13 +358,13 @@ describe('annotation route edge cases', () => {
       body: JSON.stringify({ address: absoluteAddress(), annotation: document_, reviewImage: '' }),
     })
     expect(answer.status).toBe(200)
-    expect(answer.body['annotatedImagePath']).toBeNull()
+    expect(answer.body['reviewPath']).toBeNull()
   })
 
   it('refuses a review image past the size cap, before the body cap catches it', async () => {
     // Base64 of one byte over the cap stays under the request-body cap, so this
     // exercises the image check rather than the generic body guard.
-    const encoded = 'A'.repeat((Math.floor(MAX_REVIEW_IMAGE_BYTES / 3) + 1) * 4)
+    const encoded = 'A'.repeat((Math.floor(MAX_REVIEW_BYTES / 3) + 1) * 4)
     const answer = await callRoute({ sessionCwd: async () => CWD }, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

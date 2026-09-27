@@ -29,10 +29,18 @@ import { deliverAnnotation, type SessionsLike } from './session'
 import { ensureStyles } from './styles'
 
 /** Bytes-or-nothing content the document owner delivers. */
-interface BodyContent {
+export interface BodyContent {
+  /** Kind of content the owner produced. */
   readonly kind: string
+  /** Complete file bytes, for a `bytes-complete` renderer. */
   readonly data?: Uint8Array<ArrayBuffer>
 }
+
+/** Values interpolated into one copy string. */
+export type TranslateVars = Record<string, number | string>
+
+/** The translator seat: a copy key and its interpolation values. */
+export type Translate = (key: string, vars?: TranslateVars) => string
 
 /** The props any annotator body receives from its slot's inject factory. */
 export interface AnnotatorInjected {
@@ -45,34 +53,28 @@ export interface AnnotatorInjected {
 }
 
 /**
- * One page of a paged document, supplied by the renderer that owns its pages.
+ * The page a paged renderer put on screen, as this body annotates it.
  *
- * The body annotates this page instead of the file's own bytes: the renderer
- * decides the raster, the unit size marks are measured in, and how to reach the
- * neighbouring pages. Marks are recorded in page units, so they mean the same
- * thing at any zoom or pane width.
+ * The body annotates this raster instead of the file's own bytes: the renderer
+ * that owns the document decides which page is on screen and at what resolution,
+ * and keeps the other pages' edits while this one is mounted. Marks are recorded
+ * in page units, so they mean the same thing at any zoom or pane width — and a
+ * body with a page is one page of a document, not the document itself, so it
+ * neither reads nor writes the sidecar: its owner does, once, for the whole file.
  */
 export interface PageSurface {
-  /** 1-based number of the page on screen. */
-  readonly page: number
-  /** Pages in the document. */
-  readonly pageCount: number
-  /** PNG data URL of the page, and the page's own size in page units. */
-  readonly source: {
-    readonly dataUrl: string
-    readonly width: number
-    readonly height: number
-  }
-  /** Move to another page, when the renderer offers navigation. */
-  readonly goTo?: ((page: number) => void) | undefined
+  /** PNG data URL of the page. */
+  readonly dataUrl: string
+  /** Page width in page units. */
+  readonly width: number
+  /** Page height in page units. */
+  readonly height: number
 }
 
 /** Unsaved edits of one surface, as an owner that unmounts surfaces keeps them. */
 export interface SurfaceDraft {
   /** Marks drawn so far. */
   readonly marks: readonly AnnotationMark[]
-  /** The overall note so far. */
-  readonly summary: string
 }
 
 /** Everything the body reads; all of it arrives through the composed props. */
@@ -81,16 +83,24 @@ export interface AnnotatorBodyProps {
   readonly content?: BodyContent | undefined
   /** The page a paged renderer put on screen, when this body annotates one page. */
   readonly page?: PageSurface | undefined
-  /** Edits this surface had before it mounted; a saved document still wins over them. */
+  /** Marks this surface had before it mounted; a saved document still wins over them. */
   readonly draft?: SurfaceDraft | undefined
   /** Reports every edit, so an owner that unmounts surfaces loses no unsaved work. */
   readonly onDraftChange?: ((draft: SurfaceDraft) => void) | undefined
+  /** Overall note, when an owner keeps it for the whole document. */
+  readonly summary?: string | undefined
+  /** Reports every change of the overall note. */
+  readonly onSummaryChange?: ((summary: string) => void) | undefined
+  /** Viewing or annotating, when an owner keeps the choice across its surfaces. */
+  readonly mode?: 'view' | 'annotate' | undefined
+  /** Reports every change of that choice. */
+  readonly onModeChange?: ((mode: 'view' | 'annotate') => void) | undefined
   /** The tab's `dsh-resource://file/…` address. */
   readonly resourceAddress?: string | undefined
   /** Owner callback that registers the body's scrollport. */
   readonly scrollportRef?: ((element: HTMLElement | null) => void) | undefined
   /** Locale seat bound by the shell when the namespace is registered. */
-  readonly t?: ((key: string, vars?: Record<string, unknown>) => string) | undefined
+  readonly t?: Translate | undefined
   /** Injected session delivery face. */
   readonly sessions?: SessionsLike | undefined
   /** Session this body belongs to, passed by the inject factory. */
@@ -191,25 +201,39 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * file's own figure. One value either way, so everything below reads one shape.
    */
   const surface = props.page
+  /** Whether this body annotates one page of a document its owner persists. */
+  const isPage = surface !== undefined
   const figure: LoadedFigure | null = surface === undefined
     ? fileFigure
-    : { kind: 'raster', objectUrl: surface.source.dataUrl, dataUrl: surface.source.dataUrl }
+    : { kind: 'raster', objectUrl: surface.dataUrl, dataUrl: surface.dataUrl }
   const rasterSize = surface === undefined
     ? fileRasterSize
-    : { width: surface.source.width, height: surface.source.height }
+    : { width: surface.width, height: surface.height }
 
   const [loaded, setLoaded] = useState<LoadedAnnotation | null>(null)
   const [hostError, setHostError] = useState<string | null>(null)
-  const [mode, setMode] = useState<'view' | 'annotate'>('view')
+  /**
+   * Whether the surface is being drawn on. An owner that unmounts surfaces keeps
+   * the choice (and takes every change back), so paging through a document does
+   * not put the reader back into viewing mode on every page.
+   */
+  const [ownMode, setOwnMode] = useState<'view' | 'annotate'>('view')
+  const mode = props.mode ?? ownMode
+  const chooseMode = props.onModeChange ?? setOwnMode
   const [tool, setTool] = useState<Tool>('arrow')
   const [color, setColor] = useState<string>(COLORS[0])
   const [marks, setMarks] = useState<AnnotationMark[]>(() => [...(props.draft?.marks ?? [])])
   const [past, setPast] = useState<AnnotationMark[][]>([])
   const [future, setFuture] = useState<AnnotationMark[][]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  // A draft is what this surface already held when it mounted; the Host's saved
-  // document replaces it as soon as the read returns.
-  const [summary, setSummary] = useState(props.draft?.summary ?? '')
+  /**
+   * The overall note. An owner that keeps one for a whole document supplies it
+   * (and takes every change back); on its own the body owns it, as it does for a
+   * single-surface figure.
+   */
+  const [ownSummary, setOwnSummary] = useState('')
+  const summary = props.summary ?? ownSummary
+  const writeSummary = props.onSummaryChange ?? setOwnSummary
   const [createdAt, setCreatedAt] = useState<string | null>(null)
   const [stale, setStale] = useState(false)
   const [zoom, setZoom] = useState<number | 'fit'>('fit')
@@ -277,20 +301,24 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   // --- host annotation ------------------------------------------------------
 
   useEffect(() => {
+    // A page body is one page of a document its owner persists, and the owner has
+    // already read the whole sidecar: reading it here would put every page's marks
+    // on the page on screen.
+    if (isPage) return
     if (address === '' || mediaType === undefined) return
     const controller = new AbortController()
     void (async () => {
       try {
-        const result = await loadAnnotation(address, controller.signal, surface?.page)
+        const result = await loadAnnotation(address, controller.signal)
         if (controller.signal.aborted) return
         setLoaded(result)
         setHostError(null)
         if (result.annotation !== null) {
           setMarks([...result.annotation.marks])
-          setSummary(result.annotation.summary ?? props.draft?.summary ?? '')
+          writeSummary(result.annotation.summary ?? '')
           setCreatedAt(result.annotation.createdAt)
           setStale(result.annotation.figure.sha256 !== result.sha256)
-          if (result.annotation.marks.length > 0) setMode('annotate')
+          if (result.annotation.marks.length > 0) chooseMode('annotate')
         }
       } catch (error) {
         if (controller.signal.aborted) return
@@ -298,7 +326,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       }
     })()
     return () => { controller.abort() }
-  }, [address, mediaType, surface?.page])
+  }, [address, chooseMode, isPage, mediaType, writeSummary])
 
   // --- fit width ------------------------------------------------------------
 
@@ -362,7 +390,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * Report every edit upward, so an owner that unmounts this surface (a page
    * change) can hand the unsaved work back when the surface returns.
    */
-  useEffect(() => { props.onDraftChange?.({ marks, summary }) }, [marks, summary, props.onDraftChange])
+  useEffect(() => { props.onDraftChange?.({ marks }) }, [marks, props.onDraftChange])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -396,16 +424,13 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         width: target.width,
         height: target.height,
         sha256: loaded.sha256,
-        // A page surface records which page it was, so several annotated pages
-        // of one document stay separate sidecars with separate coordinates.
-        ...(surface === undefined ? {} : { page: surface.page, pageCount: surface.pageCount }),
       },
       createdAt: createdAt ?? now,
       updatedAt: now,
       marks,
       ...(summary.trim() === '' ? {} : { summary: summary.trim() }),
     }
-  }, [address, createdAt, loaded, marks, summary, surface])
+  }, [address, createdAt, loaded, marks, summary])
 
   const run = useCallback(async (deliver: boolean): Promise<void> => {
     // The only enforcement point: the toolbar buttons stay clickable so this
@@ -426,14 +451,18 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       }
       if (props.sessions === undefined) throw new Error('the sessions service is unavailable')
       if (sessionId === undefined) throw new Error('the figure address carries no session')
-      await deliverAnnotation(
-        props.sessions,
+      await deliverAnnotation({
+        sessions: props.sessions,
+        // A single-surface figure is reviewed as the picture it is, which travels
+        // as an image part and not as an attached file.
+        fileUpload: undefined,
         sessionId,
-        document_,
-        { annotationPath: saved.annotationPath, annotatedImagePath: saved.annotatedImagePath },
-        review,
-        (props.localeId ?? 'zh').startsWith('en') ? 'en' : 'zh',
-      )
+        document: document_,
+        paths: saved,
+        pageImages: [{ page: 1, image: review }],
+        annotatedPdf: undefined,
+        locale: (props.localeId ?? 'zh').startsWith('en') ? 'en' : 'zh',
+      })
       setStatus({ tone: 'ok', text: `${t('sent')}${saved.annotationPath}` })
     } catch (error) {
       setStatus({ tone: 'error', text: `${t('saveError')}${error instanceof Error ? error.message : String(error)}` })
@@ -460,22 +489,9 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     <div className="da-root">
       <div className="da-toolbar">
         <button type="button" className="da-btn" aria-pressed={mode === 'view'}
-          onClick={() => { setMode('view') }}>{t('view')}</button>
+          onClick={() => { chooseMode('view') }}>{t('view')}</button>
         <button type="button" className="da-btn" aria-pressed={mode === 'annotate'}
-          onClick={() => { setMode('annotate') }}>{t('annotate')}</button>
-        {surface === undefined ? null : (
-          <>
-            {/* Navigation belongs to the renderer that owns the pages; a surface
-                without it still shows where the reader is. */}
-            <button type="button" className="da-btn"
-              disabled={surface.goTo === undefined || surface.page <= 1}
-              onClick={() => { surface.goTo?.(surface.page - 1) }}>{t('previousPage')}</button>
-            <span className="da-page">{`${surface.page} / ${surface.pageCount}`}</span>
-            <button type="button" className="da-btn"
-              disabled={surface.goTo === undefined || surface.page >= surface.pageCount}
-              onClick={() => { surface.goTo?.(surface.page + 1) }}>{t('nextPage')}</button>
-          </>
-        )}
+          onClick={() => { chooseMode('annotate') }}>{t('annotate')}</button>
         <span className="da-spacer" />
         {mode === 'annotate' ? (
           <>
@@ -504,10 +520,16 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         <button type="button" className="da-btn" onClick={() => { setZoom(current => Math.max(0.1, (current === 'fit' ? scale : current) / 1.25)) }}>{t('zoomOut')}</button>
         <button type="button" className="da-btn" onClick={() => { setZoom(current => Math.min(6, (current === 'fit' ? scale : current) * 1.25)) }}>{t('zoomIn')}</button>
         <span className="da-spacer" />
-        <button type="button" className="da-btn" disabled={busy !== null}
-          onClick={() => { void run(false) }}>{t('save')}</button>
-        <button type="button" className="da-btn" disabled={busy !== null}
-          onClick={() => { void run(true) }}>{t('saveAndSend')}</button>
+        {/* One page of a document is not the document: the owner that keeps every
+            page's marks is the one that saves and sends. */}
+        {isPage ? null : (
+          <>
+            <button type="button" className="da-btn" disabled={busy !== null}
+              onClick={() => { void run(false) }}>{t('save')}</button>
+            <button type="button" className="da-btn" disabled={busy !== null}
+              onClick={() => { void run(true) }}>{t('saveAndSend')}</button>
+          </>
+        )}
       </div>
 
       {hostError === null ? null : <div className="da-status" data-tone="error">{`${t('readError')}${hostError}`}</div>}
@@ -570,7 +592,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             <label style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
               <span style={{ fontSize: 12 }}>{t('summary')}</span>
               <textarea value={summary} placeholder={t('summaryPlaceholder')}
-                onChange={(event) => { setSummary(event.target.value) }} />
+                onChange={(event) => { writeSummary(event.target.value) }} />
             </label>
           </div>
           <div className="da-marks">

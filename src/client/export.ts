@@ -115,6 +115,20 @@ export function composeReviewSvg(layer: FigureLayer, marks: readonly AnnotationM
 }
 
 /**
+ * Rasterization scale for one review image.
+ *
+ * The export is meant to be read, not archived, so it is scaled up only until the
+ * long edge reaches the size a vision model still resolves, and never past twice
+ * the surface's own pixels.
+ * @param width - surface width in units.
+ * @param height - surface height in units.
+ * @returns the device scale to rasterize at.
+ */
+export function reviewScale(width: number, height: number): number {
+  return Math.min(2, Math.max(1, 2400 / Math.max(width, height)))
+}
+
+/**
  * Rasterize one review SVG to PNG bytes.
  * @param svg - standalone SVG markup.
  * @param width - output width in pixels.

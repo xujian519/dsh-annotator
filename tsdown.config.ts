@@ -53,6 +53,18 @@ function pdfRoot(): string {
   return dirname(require.resolve('pdfjs-dist/package.json'))
 }
 
+/** Third-party code bundled into the client chunk, whose licences travel with it. */
+const BUNDLED_PACKAGES = [
+  'pdf-lib',
+  '@pdf-lib/standard-fonts',
+  '@pdf-lib/upng',
+  'pako',
+  'tslib',
+] as const
+
+/** Names a bundled package's licence file may carry. */
+const LICENCE_NAMES = ['LICENSE', 'LICENSE.md', 'LICENSE.txt', 'LICENSE-MIT', 'license'] as const
+
 /** License files of PDF.js and of the data embedded beside it. */
 function pdfLicenceFiles(root: string): string[] {
   return ['LICENSE', ...ASSET_KINDS.flatMap(([, directory]) =>
@@ -63,13 +75,62 @@ function pdfLicenceFiles(root: string): string[] {
   )]
 }
 
-/** Keep every bundled PDF.js licence visible in the published artifact. */
-function pdfLicenceBanner(): string {
+/** Keep every bundled licence visible in the published artifact. */
+function licenceBanner(): string {
   const root = pdfRoot()
   const notices = pdfLicenceFiles(root)
     .map(name => `${name}\n\n${readFileSync(join(root, name), 'utf8').trimEnd()}`)
     .join('\n\n')
-  return ['//! Bundled PDF.js licence notices', ...notices.split('\n').map(line => `// ${line}`)].join('\n')
+  const all = [notices, bundledLicenceBanner()].join('\n\n')
+  return ['//! Bundled third-party licence notices', ...all.split('\n').map(line => `// ${line}`)].join('\n')
+}
+
+/**
+ * The directory one installed package lives in.
+ *
+ * Its own `package.json` is the shortest way in; a package that hides it behind an
+ * `exports` map is found through its entry file instead. Resolution starts inside
+ * the bundle's dependency tree as well as this project's, because pnpm keeps a
+ * transitive dependency out of the root `node_modules`.
+ *
+ * @param name - package name.
+ * @returns the absolute package directory.
+ * @throws {Error} when the package cannot be located at all.
+ */
+function packageDirectory(name: string): string {
+  const roots = [require, createRequire(require.resolve('pdf-lib/package.json'))]
+  for (const root of roots) {
+    try {
+      return dirname(root.resolve(`${name}/package.json`))
+    } catch {
+      // An `exports` map that hides package.json; the entry file still resolves.
+      try {
+        return dirname(root.resolve(name))
+      } catch {
+        // Not in this tree: try the next one.
+      }
+    }
+  }
+  throw new Error(`client bundle: cannot locate ${name} to carry its licence along`)
+}
+
+/**
+ * Licence notices of the third-party code the chunk bundles.
+ *
+ * A package that ships no licence file fails the build: the notice has to travel
+ * with the copy of its code, and a missing one is not something to discover after
+ * publishing.
+ *
+ * @returns the banner text.
+ */
+function bundledLicenceBanner(): string {
+  const blocks = BUNDLED_PACKAGES.map((name) => {
+    const directory = packageDirectory(name)
+    const file = readdirSync(directory).find(entry => (LICENCE_NAMES as readonly string[]).includes(entry))
+    if (file === undefined) throw new Error(`client bundle: ${name} ships no licence file to carry along`)
+    return `${name}\n\n${readFileSync(join(directory, file), 'utf8').trimEnd()}`
+  })
+  return blocks.join('\n\n')
 }
 
 /** Base64 of every CMap, standard font and wasm module, keyed by the option that reads it. */
@@ -110,9 +171,12 @@ function escapeLiteral(value: string): string {
  *
  * Rolldown emits a chunk behind `Promise.resolve().then(() => require(…))`, which
  * the factory's `require` cannot resolve in a browser; the loader exposes
- * `require.async` for exactly this fetch. A chunk with no matching call means the
- * emitted shape changed, which must fail the build rather than ship a chunk
- * nothing can load.
+ * `require.async` for exactly this fetch. A chunk whose dependency graph carries
+ * side effects — anything without `sideEffects: false`, which is most packages —
+ * is *also* preloaded with a bare `require(…)` at the top of the entry, which no
+ * browser factory can resolve either: that statement is removed for the same
+ * reason. Either shape changing must fail the build rather than ship a chunk
+ * nothing can load, so the entry is checked for leftovers.
  *
  * A chunk that shares a module with the entry is the other way this breaks: the
  * entry would `require` a sibling file statically, which the browser factory
@@ -128,15 +192,32 @@ function asyncChunkRequire(): NonNullable<UserConfig['plugins']>[] {
       for (const dynamicImport of chunk.dynamicImports) {
         const fileName = dynamicImport.startsWith('./') ? dynamicImport.slice(2) : dynamicImport
         if (!CHUNK_FILE.test(fileName)) continue
-        const call = new RegExp(
-          `Promise\\.resolve\\(\\)\\.then\\(\\(\\)\\s*=>\\s*require\\((['"])${escapeLiteral(`./${fileName}`)}\\1\\)\\)`,
-          'gu',
-        )
+        const literal = escapeLiteral(`./${fileName}`)
+        const call = new RegExp(`Promise\\.resolve\\(\\)\\.then\\(\\(\\)\\s*=>\\s*require\\((['"])${literal}\\1\\)\\)`, 'gu')
         const matches = [...rewritten.matchAll(call)]
         if (matches.length === 0) {
           throw new Error(`client bundle: dynamic chunk ${JSON.stringify(fileName)} has no generated import expression`)
         }
         rewritten = rewritten.replace(call, `require.async(${JSON.stringify(`./${fileName}`)})`)
+        // The eager preload: rolldown fetches a chunk's dependencies up front when
+        // they look like they carry side effects, which leaves the entry holding a
+        // synchronous `require` of it. A browser factory cannot resolve that, and the
+        // chunk's own code runs when `require.async` fetches it, so the statement goes
+        // — unless the alias it binds is used anywhere else, which would be a real
+        // dependency on the eager load and must fail the build instead.
+        const preload = new RegExp(`^const (require_[A-Za-z0-9_$]*) = require\\((['"])${literal}\\2\\);\\n`, 'gmu')
+        for (const match of [...rewritten.matchAll(preload)]) {
+          const alias = match[1] ?? ''
+          const without = rewritten.replace(match[0], '')
+          if (new RegExp(`\\b${escapeLiteral(alias)}\\b`, 'gu').test(without)) {
+            throw new Error(`client bundle: chunk ${JSON.stringify(fileName)} is preloaded as ${alias}, which a browser factory cannot resolve`)
+          }
+          rewritten = without
+        }
+      }
+      const leftover = /require\((['"])\.\/client\.[A-Za-z0-9][A-Za-z0-9._-]*\.js\1\)/u.exec(rewritten)
+      if (leftover !== null) {
+        throw new Error(`client bundle: ${leftover[0]} would not resolve in the browser; only require.async loads a chunk`)
       }
       return rewritten === code ? null : rewritten
     },
@@ -204,7 +285,7 @@ export default defineConfig([
       banner: (chunk) => {
         const registration = `window.__ModuleLoader__.load({ id: ${JSON.stringify(PACKAGE_NAME)}, `
           + `${chunk.isEntry ? '' : `chunk: ${JSON.stringify(chunk.fileName)}, `}factory: (require) => {`
-        return chunk.fileName === PDF_CHUNK ? `${pdfLicenceBanner()}\n${registration}` : registration
+        return chunk.fileName === PDF_CHUNK ? `${licenceBanner()}\n${registration}` : registration
       },
       footer: 'return module.exports; } });',
       intro: 'var module = { exports: {} }; var exports = module.exports;',

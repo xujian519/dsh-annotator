@@ -6,6 +6,8 @@
  * @module dsh-annotator/client/locales
  */
 
+import type { TranslateVars } from './AnnotatorBody'
+
 /** Chinese copy (the product's primary language). */
 export const zh = {
   title: '附图标注',
@@ -50,6 +52,8 @@ export const zh = {
   nextPage: '下一页',
   pdfRendering: '正在渲染这一页…',
   pdfOpenFailed: '打开 PDF 失败：',
+  documentScope: '共 {pages} 页 · {marks} 处批注',
+  notReady: '还没有读取到这个 PDF 的宿主信息，请稍后再试。',
 } as const
 
 /** English copy. */
@@ -96,6 +100,8 @@ export const en: Record<keyof typeof zh, string> = {
   nextPage: 'Next page',
   pdfRendering: 'Rendering this page…',
   pdfOpenFailed: 'Opening the PDF failed: ',
+  documentScope: '{pages} pages · {marks} marks',
+  notReady: "This PDF's Host facts are not loaded yet; try again in a moment.",
 }
 
 /** Locale namespace this dictionary registers under. */
@@ -108,9 +114,15 @@ export type CopyKey = keyof typeof zh
  * Translate one key without the locale service.
  * @param locale - active locale id.
  * @param key - copy key.
+ * @param vars - values interpolated into `{name}` placeholders.
  * @returns the localized string, falling back to Chinese.
  */
-export function fallbackTranslate(locale: string, key: string): string {
+export function fallbackTranslate(locale: string, key: string, vars?: TranslateVars): string {
   const dictionary = locale.startsWith('en') ? en : zh
-  return (dictionary as Record<string, string>)[key] ?? key
+  const text = (dictionary as Record<string, string>)[key] ?? key
+  if (vars === undefined) return text
+  return text.replace(/\{(\w+)\}/gu, (placeholder, name: string) => {
+    const value = vars[name]
+    return value === undefined ? placeholder : String(value)
+  })
 }

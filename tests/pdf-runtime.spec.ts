@@ -45,7 +45,7 @@ interface PageSize {
 /** A page proxy answering the two viewport calls the runtime makes. */
 function pageProxy(size: PageSize = { width: 595, height: 842 }, faults: { readonly renderFails?: boolean } = {}): Record<string, unknown> {
   const proxy: Record<string, unknown> = {
-    getViewport: ({ scale }: { readonly scale: number }) => ({ width: size.width * scale, height: size.height * scale }),
+    getViewport: ({ scale }: { readonly scale: number }) => ({ width: size.width * scale, height: size.height * scale, transform: [1, 0, 0, -1, 0, size.height * scale] }),
     render: () => ({ promise: faults.renderFails === true ? Promise.reject(new Error('render refused')) : Promise.resolve() }),
     cleanup: vi.fn(),
   }
@@ -142,7 +142,7 @@ describe('opening documents', () => {
     const second = pageProxy({ width: 200, height: 100 })
     recorded.task = loadingTask(pdfDocument([first, second]))
     const opened = await openPdf(new Uint8Array([9]))
-    expect(await opened.size(1)).toEqual({ width: 200, height: 100 })
+    expect(await opened.size(1)).toEqual({ width: 200, height: 100, transform: [1, 0, 0, -1, 0, 100] })
     const bitmap = await opened.render(2, 2)
     expect(bitmap).toMatchObject({
       dataUrl: 'data:image/png;base64,c3R1Yg==',

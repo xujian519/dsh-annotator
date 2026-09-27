@@ -2,9 +2,11 @@
  * The annotation data model shared by the browser half (which draws it) and the
  * Node half (which persists it).
  *
- * Coordinates are figure pixels: the origin is the figure's top-left corner and
- * one unit is one image pixel at the figure's intrinsic size, so a mark means the
- * same thing whatever zoom or pane width the annotator ran at.
+ * Coordinates are surface pixels: the origin is the surface's top-left corner and
+ * one unit is one pixel at the surface's intrinsic size, so a mark means the same
+ * thing whatever zoom or pane width the annotator ran at. A paged document is one
+ * document whose marks each name the page they were drawn on, and the page's own
+ * size is the unit those coordinates are measured in.
  * @module dsh-annotator/shared/annotation
  */
 
@@ -57,15 +59,29 @@ export interface AnnotationMark {
    * Shape geometry in figure pixels. An arrow carries tail then head, a `rect`
    * or `ellipse` carries two opposite corners, `pen` carries the sampled path,
    * and `text` carries its anchor point only.
+   *
+   * For a mark on a page of a paged document the coordinates are that page's own
+   * pixels, so they stay meaningful whatever zoom or pane width the mark was
+   * drawn at; {@link AnnotationMark.page} names the page they belong to.
    */
   readonly points: readonly FigurePoint[]
   /** The user's note for this mark. */
   readonly text?: string
+  /** 1-based page this mark sits on, for a figure that has pages. */
+  readonly page?: number
   /** Element the mark points at, when the figure exposes one. */
   readonly anchor?: MarkAnchor
 }
 
-/** Geometry of the annotated figure. */
+/**
+ * Geometry of the annotated figure.
+ *
+ * A figure is either one surface or many pages, and the two carry different
+ * facts: a single-surface figure measures itself in intrinsic pixels, a paged
+ * document has no one size (each page does) and counts pages instead. The
+ * validation in `src/host/store.ts` holds the two apart, so a reader never has
+ * to guess which kind it holds.
+ */
 export interface AnnotatedFigure {
   /** The `dsh-resource://file/…` address the annotator opened. */
   readonly address: string
@@ -73,24 +89,18 @@ export interface AnnotatedFigure {
   readonly path: string
   /** Media type of the figure file. */
   readonly mediaType: string
-  /** Intrinsic width in pixels. */
-  readonly width: number
-  /** Intrinsic height in pixels. */
-  readonly height: number
+  /** Intrinsic width in pixels, for a single-surface figure. */
+  readonly width?: number
+  /** Intrinsic height in pixels, for a single-surface figure. */
+  readonly height?: number
   /** Content hash of the figure at annotation time, used to detect a redraw. */
   readonly sha256: string
-  /**
-   * 1-based page the marks belong to, for a figure whose annotation is one page
-   * of a paged document. Width and height are that page's own size, so marks stay
-   * page-relative and survive any zoom or pane width.
-   */
-  readonly page?: number
-  /** Pages in that document, for the model-facing text. */
+  /** Pages in the paged document these marks belong to. */
   readonly pageCount?: number
 }
 
 /**
- * Suffix naming one page's sidecar files inside a paged document's name.
+ * Suffix naming one page's files inside a paged document's name.
  * @param page - 1-based page, or undefined for a single-surface figure.
  * @returns the suffix, empty when the figure has no pages.
  */
@@ -99,16 +109,27 @@ export function pageFileSuffix(page: number | undefined): string {
 }
 
 /**
- * Describe which part of a figure the marks belong to.
+ * Describe how many pages a paged figure has.
  * @param figure - the annotated figure.
  * @param locale - language of the surrounding message.
  * @returns the scope in words, or an empty string for a single-surface figure.
  */
 export function describeFigureScope(figure: AnnotatedFigure, locale: SummaryLocale): string {
-  if (figure.page === undefined) return ''
-  const zh = locale === 'zh'
-  if (figure.pageCount === undefined) return zh ? `第 ${figure.page} 页` : `page ${figure.page}`
-  return zh ? `第 ${figure.page} 页/共 ${figure.pageCount} 页` : `page ${figure.page} of ${figure.pageCount}`
+  if (figure.pageCount === undefined) return ''
+  return locale === 'zh' ? `共 ${figure.pageCount} 页` : `${figure.pageCount} pages`
+}
+
+/**
+ * List the pages that carry at least one mark.
+ * @param document - the annotation document.
+ * @returns 1-based page numbers, ascending; empty for a single-surface figure.
+ */
+export function annotatedPages(document: AnnotationDocument): number[] {
+  const pages = new Set<number>()
+  for (const mark of document.marks) {
+    if (mark.page !== undefined) pages.add(mark.page)
+  }
+  return [...pages].sort((left, right) => left - right)
 }
 
 /** The sidecar document persisted beside one figure. */
@@ -187,10 +208,13 @@ function describeAnchor(mark: AnnotationMark, locale: SummaryLocale): string {
 export function describeMark(mark: AnnotationMark, index: number, locale: SummaryLocale): string {
   const zh = locale === 'zh'
   const marker = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'][index] ?? `${index + 1}.`
+  // A mark that names a page carries it, so one numbered list can span the pages
+  // of a document without its coordinates becoming ambiguous.
+  const page = mark.page === undefined ? '' : (zh ? `第 ${mark.page} 页 ` : `page ${mark.page} `)
   const note = mark.text !== undefined && mark.text.trim() !== ''
     ? (zh ? `：${mark.text.trim()}` : `: ${mark.text.trim()}`)
     : (zh ? '：（未写说明）' : ': (no note)')
-  return `${marker} ${describeShape(mark, locale)}${describeAnchor(mark, locale)}${note}`
+  return `${marker} ${page}${describeShape(mark, locale)}${describeAnchor(mark, locale)}${note}`
 }
 
 /**

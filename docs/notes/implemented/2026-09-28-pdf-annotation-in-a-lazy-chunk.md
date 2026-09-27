@@ -2,6 +2,8 @@
 
 Status: implemented
 
+Superseded by: `2026-09-28-pdf-annotated-as-one-document.md`（一份文档一份标注、写回原生注释对象）。
+
 ## Problem
 
 项目目标是给图片、SVG、PDF、HTML、Office 文档做标注。图片与 SVG 已实现：浏览器半边拿到整份字节，渲染成位图或内联 SVG，画布坐标用图的固有像素，导出 PNG 与 Markdown 回填会话。PDF 不一样：一份文件有几十页，标注必须说明"第几页"；而解析 PDF 需要 PDF.js，它连同 worker、CMap、标准字体与 wasm 数据约 6.8 MB —— 塞进启动包会让每个会话都付这笔钱，而多数会话根本不打开 PDF。

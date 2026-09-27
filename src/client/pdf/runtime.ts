@@ -25,12 +25,19 @@ export interface PdfPageBitmap {
   readonly pixelHeight: number
 }
 
-/** One page's size in PDF units. */
+/** One page's size in page units. */
 export interface PdfPageSize {
-  /** Width in PDF units. */
+  /** Width in page units. */
   readonly width: number
-  /** Height in PDF units. */
+  /** Height in page units. */
   readonly height: number
+  /**
+   * `[a b c d e f]`: PDF user space → these units. It carries the page's media-box
+   * offset, its `/Rotate`, and its `/UserUnit`, so a mark measured in page units can
+   * be written back into the document as a native annotation wherever the page puts
+   * its origin.
+   */
+  readonly transform: readonly number[]
 }
 
 /** One opened PDF, and the lifetime of everything that opened it. */
@@ -114,7 +121,7 @@ export async function openPdf(data: Uint8Array<ArrayBuffer>): Promise<PdfDocumen
         const proxy = await pdf.getPage(page)
         return await withPage(proxy, (measured) => {
           const viewport = measured.getViewport({ scale: 1 })
-          return { width: viewport.width, height: viewport.height }
+          return { width: viewport.width, height: viewport.height, transform: viewport.transform }
         })
       },
       render: async (page: number, scale: number): Promise<PdfPageBitmap> => {

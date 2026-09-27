@@ -97,29 +97,44 @@ describe('reading a saved annotation', () => {
 })
 
 describe('writing an annotation', () => {
-  it('posts the document without an image part when the browser exported none', async () => {
-    const calls = stubFetch({ ok: true, annotationPath: '/w/fig1.annot.json', annotatedImagePath: null })
+  it('posts the document without a review artifact when the browser exported none', async () => {
+    const calls = stubFetch({ ok: true, annotationPath: '/w/fig1.annot.json', reviewPath: null })
     const saved = await saveAnnotation('dsh-resource://file/session/s1/fig1.svg', document_)
-    expect(saved).toEqual({ annotationPath: '/w/fig1.annot.json', annotatedImagePath: null })
+    expect(saved).toEqual({ annotationPath: '/w/fig1.annot.json', reviewPath: null })
     const body = bodyOf(calls[0])
     expect(body['address']).toBe('dsh-resource://file/session/s1/fig1.svg')
     expect(body['annotation']).toEqual(document_)
     expect(body['reviewImage']).toBeUndefined()
+    expect(body['annotatedPdf']).toBeUndefined()
     expect(calls[0]?.init?.method).toBe('POST')
   })
 
   it('encodes the flattened review image as base64 alongside the document', async () => {
-    const calls = stubFetch({ ok: true, annotationPath: '/w/fig1.annot.json', annotatedImagePath: '/w/fig1.annotated.png' })
+    const calls = stubFetch({ ok: true, annotationPath: '/w/fig1.annot.json', reviewPath: '/w/fig1.annotated.png' })
     const saved = await saveAnnotation(
       'dsh-resource://file/session/s1/fig1.svg',
       document_,
       new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }),
     )
-    expect(saved.annotatedImagePath).toBe('/w/fig1.annotated.png')
+    expect(saved.reviewPath).toBe('/w/fig1.annotated.png')
     expect(bodyOf(calls[0])['reviewImage']).toBe('AQID')
   })
 
-  it('encodes an image larger than one base64 chunk', async () => {
+  it('carries an annotated document in its own payload, which is what the Host writes', async () => {
+    const calls = stubFetch({ ok: true, annotationPath: '/w/report.pdf.annot.json', reviewPath: '/w/report.pdf.annotated.pdf' })
+    const paged: AnnotationDocument = {
+      ...document_,
+      figure: { address: 'a', path: '/w/report.pdf', mediaType: 'application/pdf', sha256: 'c'.repeat(64), pageCount: 2 },
+      marks: [{ id: 'p1', kind: 'pen', color: '#000', points: [[0, 0], [1, 1]], page: 1 }],
+    }
+    const saved = await saveAnnotation('dsh-resource://file/session/s1/report.pdf', paged, new Uint8Array([0x25, 0x50, 0x44, 0x46]))
+    expect(saved.reviewPath).toBe('/w/report.pdf.annotated.pdf')
+    const body = bodyOf(calls[0])
+    expect(body['annotatedPdf']).toBe('JVBERg==')
+    expect(body['reviewImage']).toBeUndefined()
+  })
+
+  it('encodes an artifact larger than one base64 chunk', async () => {
     // The encoder walks the bytes in 32 KiB chunks; a single chunk would not exist.
     const bytes = new Uint8Array(0x8000 + 4).fill(7)
     const calls = stubFetch({ ok: true, annotationPath: '/w/fig1.annot.json' })
@@ -142,17 +157,15 @@ describe('writing an annotation', () => {
   })
 })
 
-describe('reading one page of a paged document', () => {
-  it('names the page in the query, and leaves it out for a whole figure', async () => {
+describe('reading a document that has pages', () => {
+  it('asks for the whole document, whichever page the reader is on', async () => {
     const calls = stubFetch({
       ok: true,
       figure: { path: '/w/report.pdf', mediaType: 'application/pdf', sha256: 'c'.repeat(64) },
       annotation: null,
     })
-    await loadAnnotation('dsh-resource://file/session/s1/report.pdf', new AbortController().signal, 3)
-    expect(calls[0]?.url).toContain('page=3')
     await loadAnnotation('dsh-resource://file/session/s1/report.pdf', new AbortController().signal)
-    expect(calls[1]?.url).not.toContain('page=')
+    expect(calls[0]?.url).not.toContain('page=')
   })
 
   it('round-trips an address that carries the characters a query would mangle', async () => {

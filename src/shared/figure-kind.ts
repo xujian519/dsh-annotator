@@ -6,8 +6,9 @@
 /**
  * File suffixes this plugin treats as annotatable figures.
  *
- * A PDF is annotated page by page: the browser half renders one page as a
- * raster and the sidecar records which page the marks belong to.
+ * A PDF is one document however many pages it has: the browser half renders one
+ * page at a time, each mark records the page it was drawn on, and saving writes
+ * the marks back into a copy of the document as native annotations.
  */
 export const FIGURE_EXTENSIONS = ['svg', 'png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'ico', 'pdf'] as const
 
