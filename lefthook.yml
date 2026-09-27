@@ -1,0 +1,22 @@
+# 本地窄、CI 全（AGENTS.md §7）。钩子只做秒级的事，全量门禁在 CI：
+# pre-commit 修当前暂存的文件 + 查空白，pre-push 只做 typecheck。
+# 钩子里不跑测试，更不跑 coverage——那会让每次提交都卡住，而卡住的门禁会被绕过。
+
+pre-commit:
+  parallel: true
+  jobs:
+    - name: lint-staged
+      glob: '*.{ts,tsx,mjs}'
+      # 故意写坏的 fixture 不参与：它们存在的意义就是让门禁变红。
+      exclude:
+        - tests/gates/fixtures/*
+      run: node_modules/.bin/oxlint --type-aware --deny-warnings --fix {staged_files}
+      stage_fixed: true
+
+    - name: whitespace
+      run: git diff --cached --check
+
+pre-push:
+  jobs:
+    - name: typecheck
+      run: pnpm run typecheck

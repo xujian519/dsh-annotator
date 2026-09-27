@@ -1,0 +1,6 @@
+# dsh-annotator bundle layer: 文档标注插件。
+# 一条 row 同时挂载 Host 半（路由 + 智能体指引段）与 Client 半（右侧栏预览器里的标注画布）。
+- insert:
+    - id: dsh-annotator
+      name: 'dsh-annotator'
+      config: {}
