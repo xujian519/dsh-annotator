@@ -22,7 +22,7 @@ DSH（DeepSeek Harness）第三方插件包，一个 npm 包、两个半：
 **先读这一节再写代码。**
 
 1. **Client 半边必须符合 DSH 动态客户端契约**：单文件 CJS；唯一副作用是 `window.__ModuleLoader__.load({id, factory})`；只允许 `react` / `react/jsx-runtime` / `react-dom` / `react-dom/client` 走 shell 的模块表，其余依赖全部内联（插件路由发不了字体等静态资产）。构建契约在 `tsdown.config.ts` 的 `CLIENT_EXTERNALS` 与 `outputOptions.banner`。
-2. **唯一的写入面是两个侧车文件**。标注绝不修改被标注的文档；写入路径一律由 `sidecarPaths()` 从文档路径推导（`<名>.annot.json`、`<名>.annotated.png`），不接受调用方传入目标路径。
+2. **唯一的写入面是两个侧车文件**。标注绝不修改被标注的文档；写入路径一律由 `sidecarPaths()` 从文档路径推导（`<名含扩展名>.annot.json`、`<名含扩展名>.annotated.png`），不接受调用方传入目标路径。读回走 `annotationCandidates()`：新名字优先，旧的主名名字只作回退，且文档必须指向当前文件（`annotationTargetsFigure()`）才被采用。
 3. **插件路由自带守卫**。路由在 `/api` 之外，必须校验 `x-dsh-annotator` 请求头（再加 `Sec-Fetch-Site` 同源检查）；Client 与 Host 两侧的头名/前缀必须逐字一致（`src/host/routes.ts` ↔ `src/client/host-api.ts`）。
 4. **注册即效应**。一切注册走 `ctx.effect()` / `ctx.inject()`，让卸载可逆；不要留下裸的 `addEventListener` 或全局可变态。
 5. **边界 JSON 必须校验**。Host 收到的请求体一律经 `readAnnotationDocument()`（`src/host/store.ts`）校验后才能落盘，不做裸断言。

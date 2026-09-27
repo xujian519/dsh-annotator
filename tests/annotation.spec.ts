@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { AnnotationDocument, AnnotationMark, MarkKind } from '../src/shared/annotation'
-import { ANNOTATION_VERSION, describeMark, describeMarks } from '../src/shared/annotation'
+import {
+  ANNOTATION_VERSION,
+  ANNOTATION_VERSION_V2,
+  describeMark,
+  describeMarks,
+} from '../src/shared/annotation'
 import { readAnnotation, readAnnotationDocument, writeAnnotation } from '../src/host/store'
 import { buildAnnotationMessage } from '../src/client/session'
 import { defined } from './dom'
@@ -135,6 +140,7 @@ describe('sidecar round trip', () => {
     await writeFile(figure, '<svg/>')
     const saved = await writeAnnotation(figure, document_, new Uint8Array([1, 2, 3]))
     expect(saved.wroteImage).toBe(true)
+    expect(saved.paths.annotation).toBe(join(directory, 'fig1.svg.annot.json'))
     expect(await readFile(saved.paths.annotatedImage)).toEqual(Buffer.from([1, 2, 3]))
     expect((await readAnnotation(figure))?.summary).toBe('五处问题')
   })
@@ -151,15 +157,112 @@ describe('sidecar round trip', () => {
     const figure = join(directory, 'fig2.svg')
     await writeFile(figure, '<svg/>')
     expect(await readAnnotation(figure)).toBeNull()
-    await writeFile(join(directory, 'fig2.annot.json'), '{ not json')
+    await writeFile(join(directory, 'fig2.svg.annot.json'), '{ not json')
     expect(await readAnnotation(figure)).toBeNull()
   })
 
   it('ignores a sidecar too large to be one this plugin wrote', async () => {
     const figure = join(directory, 'fig3.svg')
     await writeFile(figure, '<svg/>')
-    await writeFile(join(directory, 'fig3.annot.json'), `{"pad":"${'x'.repeat(5 * 1024 * 1024)}"}`)
+    await writeFile(join(directory, 'fig3.svg.annot.json'), `{"pad":"${'x'.repeat(5 * 1024 * 1024)}"}`)
     expect(await readAnnotation(figure)).toBeNull()
+  })
+})
+
+describe('a sidecar written beside one figure in a shared workbench', () => {
+  let directory: string
+  beforeEach(async () => { directory = await mkdtemp(join(tmpdir(), 'dsh-annotator-shared-')) })
+  afterEach(async () => { await rm(directory, { recursive: true, force: true }) })
+
+  /** A v2 document: the shape the sibling annotator writes into the same workbench. */
+  const v2Document = (figurePath: string): unknown => ({
+    version: ANNOTATION_VERSION_V2,
+    target: {
+      kind: 'figure-svg',
+      path: figurePath,
+      relativePath: 'figures/fig9.svg',
+      mediaType: 'image/svg+xml',
+      width: 400,
+      height: 300,
+      sha256: 'd'.repeat(64),
+    },
+    createdAt: '2026-02-01T00:00:00.000Z',
+    updatedAt: '2026-02-02T00:00:00.000Z',
+    marks: [{
+      id: 's1',
+      kind: 'arrow',
+      color: '#e03131',
+      points: [[300, 225], [100, 66]],
+      text: '这个标号应指向滑套 34',
+      targetFingerprint: `sha256:${'d'.repeat(64)}`,
+      anchor: { tag: 'g', title: '102', id: 'node102', nodeId: '102', ref: '34', text: '导柱', bbox: [40, 40, 120, 60] },
+    }],
+    summary: 'v2 总体说明',
+  })
+
+  it('reads a v2 document back in its own shape', async () => {
+    const figure = join(directory, 'fig9.svg')
+    await writeFile(figure, '<svg/>')
+    await writeFile(join(directory, 'fig9.svg.annot.json'), JSON.stringify(v2Document(figure)))
+    const stored = defined(await readAnnotation(figure))
+    expect(stored.figure.path).toBe(figure)
+    expect(stored.figure.sha256).toBe('d'.repeat(64))
+    expect(stored.summary).toBe('v2 总体说明')
+    expect(stored.marks).toHaveLength(1)
+    expect(defined(stored.marks[0]).text).toBe('这个标号应指向滑套 34')
+    // The figure's path stands in for the address v2 does not carry, and the fields
+    // this plugin does not model are dropped rather than carried along as noise.
+    expect(stored.figure.address).toBe(figure)
+    expect(defined(stored.marks[0]).anchor)
+      .toEqual({ tag: 'g', title: '102', id: 'node102', text: '导柱', bbox: [40, 40, 120, 60] })
+  })
+
+  it('reads the marks file earlier versions named after the base name alone', async () => {
+    const figure = join(directory, 'fig10.svg')
+    await writeFile(figure, '<svg/>')
+    const forFigure = { ...document_, figure: { ...document_.figure, path: figure } }
+    await writeFile(join(directory, 'fig10.annot.json'), JSON.stringify(forFigure))
+    expect((await readAnnotation(figure))?.summary).toBe('五处问题')
+  })
+
+  it('prefers the current name when both names hold a document', async () => {
+    const figure = join(directory, 'fig11.svg')
+    await writeFile(figure, '<svg/>')
+    const forFigure = { ...document_, figure: { ...document_.figure, path: figure } }
+    await writeFile(join(directory, 'fig11.svg.annot.json'), JSON.stringify({ ...forFigure, summary: '当前名' }))
+    await writeFile(join(directory, 'fig11.annot.json'), JSON.stringify({ ...forFigure, summary: '旧名' }))
+    expect((await readAnnotation(figure))?.summary).toBe('当前名')
+  })
+
+  it('refuses a legacy sidecar that belongs to a figure of the same base name', async () => {
+    const svg = join(directory, 'fig12.svg')
+    const png = join(directory, 'fig12.png')
+    await writeFile(svg, '<svg/>')
+    await writeFile(png, 'png')
+    // One legacy name, two figures: the document itself says which one it annotates.
+    await writeFile(
+      join(directory, 'fig12.annot.json'),
+      JSON.stringify({ ...document_, figure: { ...document_.figure, path: png } }),
+    )
+    expect(await readAnnotation(svg)).toBeNull()
+    expect((await readAnnotation(png))?.summary).toBe('五处问题')
+  })
+
+  it('answers null for a document it cannot recognize', async () => {
+    const figure = join(directory, 'fig13.svg')
+    await writeFile(figure, '<svg/>')
+    const sidecar = join(directory, 'fig13.svg.annot.json')
+    const bodies = [
+      JSON.stringify({ version: 9 }),
+      JSON.stringify(7),
+      JSON.stringify(null),
+      JSON.stringify({ version: ANNOTATION_VERSION_V2, target: 'figure' }),
+      JSON.stringify({ version: ANNOTATION_VERSION_V2, target: null }),
+    ]
+    for (const body of bodies) {
+      await writeFile(sidecar, body)
+      expect(await readAnnotation(figure)).toBeNull()
+    }
   })
 })
 

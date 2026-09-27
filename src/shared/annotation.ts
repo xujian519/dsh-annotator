@@ -11,6 +11,17 @@
 /** Schema version of the sidecar document. */
 export const ANNOTATION_VERSION = 1
 
+/**
+ * Schema version of the v2 sidecar document.
+ *
+ * v2 is written by the sibling annotator that shares a workbench with this plugin
+ * (Sati). It carries the same marks and the same figure facts, but names the figure
+ * `target` instead of `figure` and records that target's kind. This plugin reads v2
+ * documents and keeps writing its own {@link ANNOTATION_VERSION} ones — the
+ * translation lives in `src/host/store.ts`.
+ */
+export const ANNOTATION_VERSION_V2 = 2
+
 /** One mark's shape kind. */
 export type MarkKind = 'arrow' | 'rect' | 'ellipse' | 'pen' | 'text'
 

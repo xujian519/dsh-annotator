@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { GUARD_HEADER, createHandlers } from '../src/host/routes'
 import { MAX_REVIEW_IMAGE_BYTES } from '../src/host/store'
-import { ANNOTATION_VERSION } from '../src/shared/annotation'
+import { ANNOTATION_VERSION, ANNOTATION_VERSION_V2 } from '../src/shared/annotation'
 import type { AnnotationDocument } from '../src/shared/annotation'
 
 const FIGURE = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>'
@@ -91,13 +91,37 @@ describe('annotation route', () => {
     })
     expect(save.status).toBe(200)
     const saved = await save.json() as { annotationPath: string; annotatedImagePath: string }
-    expect(saved.annotationPath).toBe(join(directory, 'fig1.annot.json'))
-    expect(saved.annotatedImagePath).toBe(join(directory, 'fig1.annotated.png'))
+    expect(saved.annotationPath).toBe(join(directory, 'fig1.svg.annot.json'))
+    expect(saved.annotatedImagePath).toBe(join(directory, 'fig1.svg.annotated.png'))
 
     const read = await fetch(`${origin}/dsh-annotator/annotation?address=${encodeURIComponent(address)}`, { headers: guard })
     const loaded = await read.json() as { figure: { sha256: string }; annotation: AnnotationDocument }
     expect(loaded.annotation.marks).toHaveLength(1)
     expect(loaded.figure.sha256).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('serves a v2 document the sibling annotator left beside the figure', async () => {
+    const figure = join(directory, 'fig-shared.svg')
+    await writeFile(figure, FIGURE)
+    await writeFile(join(directory, 'fig-shared.svg.annot.json'), JSON.stringify({
+      version: ANNOTATION_VERSION_V2,
+      target: {
+        kind: 'figure-svg',
+        path: figure,
+        relativePath: 'fig-shared.svg',
+        mediaType: 'image/svg+xml',
+        width: 10,
+        height: 10,
+        sha256: 'e'.repeat(64),
+      },
+      createdAt: '2026-03-01T00:00:00.000Z',
+      updatedAt: '2026-03-01T00:00:00.000Z',
+      marks: [{ id: 's1', kind: 'rect', color: '#1971c2', points: [[1, 2], [3, 4]], text: '来自另一侧的标注' }],
+    }))
+    const address = `dsh-resource://file/session/s1//${figure}`
+    const read = await fetch(`${origin}/dsh-annotator/annotation?address=${encodeURIComponent(address)}`, { headers: guard })
+    const loaded = await read.json() as { annotation: AnnotationDocument | null }
+    expect(loaded.annotation?.marks[0]?.text).toBe('来自另一侧的标注')
   })
 
   it('rejects an invalid document body with a message, not a crash', async () => {

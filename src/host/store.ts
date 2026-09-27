@@ -11,6 +11,7 @@ import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import {
   ANNOTATION_VERSION,
+  ANNOTATION_VERSION_V2,
   type AnnotationDocument,
   type AnnotationMark,
   type FigureBox,
@@ -18,7 +19,7 @@ import {
   type MarkAnchor,
   type MarkKind,
 } from '../shared/annotation'
-import { sidecarPaths, type SidecarPaths } from './sidecar'
+import { annotationCandidates, annotationTargetsFigure, sidecarPaths, type SidecarPaths } from './sidecar'
 
 /** Maximum accepted sidecar size; a document larger than this is not one we wrote. */
 const MAX_ANNOTATION_BYTES = 4 * 1024 * 1024
@@ -156,26 +157,91 @@ export function readAnnotationDocument(value: unknown): AnnotationDocument {
 
 /**
  * Read one figure's saved annotation.
+ *
+ * The current sidecar name is tried first, then the legacy base-name one, and a
+ * document that names a different figure is skipped — two figures in one directory
+ * that share a base name would otherwise read each other's marks.
+ *
  * @param figurePath - absolute path of the figure.
  * @returns the document, or null when none was stored or it is unreadable.
  */
 export async function readAnnotation(figurePath: string): Promise<AnnotationDocument | null> {
-  const { annotation } = sidecarPaths(figurePath)
+  for (const candidate of annotationCandidates(figurePath)) {
+    const document = await readSidecar(candidate)
+    if (document !== null && annotationTargetsFigure(document, figurePath)) return document
+  }
+  return null
+}
+
+/**
+ * Parse one marks file into this plugin's document shape.
+ * @param sidecarPath - absolute path of the marks file.
+ * @returns the document, or null when the file is missing, oversized, or unreadable.
+ */
+async function readSidecar(sidecarPath: string): Promise<AnnotationDocument | null> {
   let text: string
   try {
-    const info = await stat(annotation)
+    const info = await stat(sidecarPath)
     if (info.size > MAX_ANNOTATION_BYTES) return null
-    text = await readFile(annotation, 'utf8')
+    text = await readFile(sidecarPath, 'utf8')
   } catch {
     // A missing sidecar is the ordinary "never annotated" state.
     return null
   }
   try {
-    return readAnnotationDocument(JSON.parse(text) as unknown)
+    return readStoredDocument(JSON.parse(text) as unknown)
   } catch {
     // A sidecar this plugin cannot parse is reported as "no annotation" so the
     // user can start over instead of the preview failing to open.
     return null
+  }
+}
+
+/**
+ * Read a stored sidecar document in either schema version this workbench sees.
+ * @param value - parsed marks file content.
+ * @returns the document in this plugin's shape, or null when it is neither version.
+ */
+function readStoredDocument(value: unknown): AnnotationDocument | null {
+  if (typeof value !== 'object' || value === null) return null
+  const raw = value as Record<string, unknown>
+  if (raw['version'] === ANNOTATION_VERSION) return readAnnotationDocument(raw)
+  if (raw['version'] === ANNOTATION_VERSION_V2) return readAnnotationDocument(bridgeV2Document(raw))
+  return null
+}
+
+/**
+ * Restate a v2 document as the v1 shape this plugin validates and writes.
+ *
+ * Both versions carry the same marks and the same figure facts. v2 names the figure
+ * `target`, adds fields this plugin does not model (`kind` on the target, per-mark
+ * `targetFingerprint`, `nodeId`/`ref` on an anchor — the v1 reader then drops them),
+ * and omits `address`, the one v1 field it has no counterpart for: the figure's own
+ * path stands in, and the browser half replaces it with the live preview address the
+ * next time it saves.
+ *
+ * @param raw - parsed v2 document.
+ * @returns the same document as a v1 shape.
+ * @throws {Error} when the document carries no target object.
+ */
+function bridgeV2Document(raw: Record<string, unknown>): unknown {
+  const target = raw['target']
+  if (typeof target !== 'object' || target === null) throw new Error('annotation document needs a target')
+  const figure = target as Record<string, unknown>
+  return {
+    version: ANNOTATION_VERSION,
+    figure: {
+      address: figure['path'],
+      path: figure['path'],
+      mediaType: figure['mediaType'],
+      width: figure['width'],
+      height: figure['height'],
+      sha256: figure['sha256'],
+    },
+    createdAt: raw['createdAt'],
+    updatedAt: raw['updatedAt'],
+    marks: raw['marks'],
+    summary: raw['summary'],
   }
 }
 

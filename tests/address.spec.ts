@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseFileAddress } from '../src/shared/address'
 import { figureMediaType, isFigurePath, suffixOf } from '../src/shared/figure-kind'
-import { sidecarPaths } from '../src/host/sidecar'
+import { annotationCandidates, legacyAnnotationPath, sidecarPaths } from '../src/host/sidecar'
 import { resolveSessionCwd } from '../src/host/session-cwd'
 
 describe('file addresses', () => {
@@ -73,15 +73,27 @@ describe('figure suffixes', () => {
 })
 
 describe('sidecar paths', () => {
-  it('derives both sibling files from the figure name', () => {
+  it('derives both sibling files from the figure name, extension included', () => {
     expect(sidecarPaths('/w/figures/fig1.svg')).toEqual({
-      annotation: '/w/figures/fig1.annot.json',
-      annotatedImage: '/w/figures/fig1.annotated.png',
+      annotation: '/w/figures/fig1.svg.annot.json',
+      annotatedImage: '/w/figures/fig1.svg.annotated.png',
     })
   })
 
   it('keeps dotted names intact', () => {
-    expect(sidecarPaths('/w/图 1.a.svg').annotation).toBe('/w/图 1.a.annot.json')
+    expect(sidecarPaths('/w/图 1.a.svg').annotation).toBe('/w/图 1.a.svg.annot.json')
+  })
+
+  it('still names the marks file earlier versions derived from the base name', () => {
+    expect(legacyAnnotationPath('/w/figures/fig1.svg')).toBe('/w/figures/fig1.annot.json')
+  })
+
+  it('offers the legacy name only as a fallback, and deduplicates a name without extension', () => {
+    expect(annotationCandidates('/w/figures/fig1.svg')).toEqual([
+      '/w/figures/fig1.svg.annot.json',
+      '/w/figures/fig1.annot.json',
+    ])
+    expect(annotationCandidates('/w/Makefile')).toEqual(['/w/Makefile.annot.json'])
   })
 })
 
