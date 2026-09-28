@@ -144,6 +144,18 @@ function copy(key: string, vars?: Record<string, number | string>): string {
 let paneWidth = 800
 let notifyResize: (() => void) | null = null
 
+/**
+ * The width one raster serves for a pane.
+ *
+ * Mirrors the body's own step: a dragged pane is rasterized per step, not per
+ * pixel, so the scale a raster is asked for is the stepped width's.
+ * @param width - pane width in CSS pixels.
+ * @returns the width the raster is rendered for.
+ */
+function stepped(width: number): number {
+  return Math.ceil(width / 64) * 64
+}
+
 /** The props one mounted body is rendered with, with only the spec's own spelled out. */
 function bodyProps(props: Partial<PdfBodyProps> = {}): PdfBodyProps {
   return {
@@ -282,10 +294,16 @@ describe('opening a PDF', () => {
     runtime.deferOpen = true
     const { host } = await mount()
     expect(host.textContent).toContain(zh.pdfRendering)
+    // The wait fills the page slot, so the pane's frame is already there.
+    expect(host.querySelector('.da-placeholder')).not.toBeNull()
+    // …and it states nothing the document has not said yet.
+    expect(host.textContent).not.toContain('1 / 0')
+    expect(host.textContent).not.toContain(copy('documentScope', { pages: 0, marks: 0 }))
     expect(surfaces).toHaveLength(0)
     runtime.settleOpen?.()
     await settle()
     expect(currentProps().page?.dataUrl).toBe('data:image/png;base64,page1')
+    expect(host.querySelector('.da-placeholder')).toBeNull()
   })
 
   it('renders nothing, and opens nothing, without bytes', async () => {
@@ -338,21 +356,53 @@ describe('opening a PDF', () => {
   })
 
   it('asks the parser for device pixels at the fit scale, within what the display can show', async () => {
-    // 800px pane, 24px inset, 600pt page = a fit scale of 1.293.
+    // 800px pane, 24px inset, 600pt page, at the width one raster step serves.
     await mount()
-    expect(defined(runtime.rendered[0]).scale).toBeCloseTo((800 - 24) / 600, 3)
+    expect(defined(runtime.rendered[0]).scale).toBeCloseTo((stepped(800) - 24) / 600, 3)
     vi.stubGlobal('devicePixelRatio', 3)
     paneWidth = 1000
     await act(async () => { notifyResize?.() })
     await settle()
     // Denser than 2 is not worth the pixels.
-    expect(defined(runtime.rendered[runtime.rendered.length - 1]).scale).toBeCloseTo(((1000 - 24) / 600) * 2, 3)
+    expect(defined(runtime.rendered[runtime.rendered.length - 1]).scale).toBeCloseTo(((stepped(1000) - 24) / 600) * 2, 3)
     vi.stubGlobal('devicePixelRatio', 0)
     paneWidth = 800
     await act(async () => { notifyResize?.() })
     await settle()
     // A display that reports nothing still renders at 1:1.
-    expect(defined(runtime.rendered[runtime.rendered.length - 1]).scale).toBeCloseTo((800 - 24) / 600, 3)
+    expect(defined(runtime.rendered[runtime.rendered.length - 1]).scale).toBeCloseTo((stepped(800) - 24) / 600, 3)
+  })
+
+  it('serves a whole width step, so a dragged pane does not rasterize every pixel', async () => {
+    await mount()
+    expect(runtime.rendered).toHaveLength(1)
+    // Stretching the pane inside the step it is already rendered for costs nothing.
+    paneWidth = 830
+    await act(async () => { notifyResize?.() })
+    await settle()
+    expect(runtime.rendered).toHaveLength(1)
+    // Crossing into the next step asks for one more raster.
+    paneWidth = 900
+    await act(async () => { notifyResize?.() })
+    await settle()
+    expect(runtime.rendered).toHaveLength(2)
+    expect(defined(runtime.rendered[1]).scale).toBeCloseTo((stepped(900) - 24) / 600, 3)
+  })
+
+  it('leaves the page on screen while the raster for the new width is drawn', async () => {
+    // Blanking the pane first is what made a drag flash: the page that is already
+    // there stays up until the replacement exists.
+    const { host } = await mount()
+    expect(currentProps().page?.dataUrl).toBe('data:image/png;base64,page1')
+    runtime.deferRender = true
+    paneWidth = 1200
+    await act(async () => { notifyResize?.() })
+    await settle()
+    expect(host.textContent).not.toContain(zh.pdfRendering)
+    expect(currentProps().page?.dataUrl).toBe('data:image/png;base64,page1')
+    runtime.settleRender?.()
+    await settle()
+    expect(defined(runtime.rendered[runtime.rendered.length - 1]).scale).toBeCloseTo((stepped(1200) - 24) / 600, 3)
   })
 })
 
@@ -398,6 +448,38 @@ describe('paging', () => {
     expect(button(host, zh.nextPage).disabled).toBe(true)
     await click(button(host, zh.previousPage))
     expect(host.textContent).toContain('2 / 3')
+  })
+
+  it('keeps the page on screen while the next one is drawn, instead of emptying the pane', async () => {
+    // Emptying the pane for as long as a raster takes is the flash a page turn
+    // was: the page already on screen stays until its replacement exists.
+    const { host } = await mount()
+    expect(currentProps().page?.dataUrl).toBe('data:image/png;base64,page1')
+    runtime.deferRender = true
+    await click(button(host, zh.nextPage))
+    expect(host.textContent).toContain('2 / 3')
+    expect(host.textContent).not.toContain(zh.pdfRendering)
+    expect(currentProps().page?.dataUrl).toBe('data:image/png;base64,page1')
+    runtime.settleRender?.()
+    await settle()
+    expect(currentProps().page?.dataUrl).toBe('data:image/png;base64,page2')
+  })
+
+  it('files a page’s edits under the page they were drawn on, not the one being fetched', async () => {
+    // The pane can be a page behind the number in the toolbar, and a mark drawn
+    // then belongs to the pixels under the pointer.
+    const { host } = await mount()
+    runtime.deferRender = true
+    await click(button(host, zh.nextPage))
+    expect(host.textContent).toContain('2 / 3')
+    await edit([mark('m1', 1)])
+    runtime.settleRender?.()
+    await settle()
+    expect(currentProps().page?.dataUrl).toBe('data:image/png;base64,page2')
+    expect(currentProps().draft?.marks).toEqual([])
+    runtime.deferRender = false
+    await click(button(host, zh.previousPage))
+    expect(currentProps().draft?.marks).toEqual([mark('m1', 1)])
   })
 
   it('hands the annotator body one report callback, so a draft cannot loop', async () => {
@@ -500,6 +582,55 @@ describe('paging', () => {
     }
     const { host } = await mount()
     expect(host.textContent).not.toContain(zh.stale)
+  })
+})
+
+describe('the shell around the document', () => {
+  it('reads the sidecar once, however often the shell renders the tab', async () => {
+    // A slot's injected face is built again on every render of the tab. The read
+    // is keyed on the document, so the same document is read once — otherwise the
+    // pane re-reads, and re-renders, for as long as the shell keeps rendering.
+    const { root } = await mount()
+    expect(seatState.loads).toHaveLength(1)
+    await rerender(root, {})
+    await rerender(root, {})
+    expect(seatState.loads).toHaveLength(1)
+  })
+
+  it('keeps the reader’s unsaved work across a shell re-render', async () => {
+    // The document on disk carries one mark on page one; the reader adds one on
+    // page two and types a note. A re-read would replace both with what is saved.
+    seatState.loaded = {
+      path: '/w/report.pdf',
+      mediaType: 'application/pdf',
+      sha256: 'a'.repeat(64),
+      annotation: {
+        version: 1,
+        figure: { address: 'a', path: '/w/report.pdf', mediaType: 'application/pdf', sha256: 'a'.repeat(64), pageCount: 3 },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        marks: [mark('saved1', 1)],
+      },
+    }
+    const { host, root } = await mount()
+    await click(button(host, zh.nextPage))
+    await edit([mark('m2', 2)])
+    currentProps().onSummaryChange?.('两份附图一起改')
+    await settle()
+    expect(host.textContent).toContain(copy('documentScope', { pages: 3, marks: 2 }))
+    await rerender(root, {})
+    expect(currentProps().summary).toBe('两份附图一起改')
+    expect(host.textContent).toContain(copy('documentScope', { pages: 3, marks: 2 }))
+  })
+
+  it('still reads the document again when the tab moves to another one', async () => {
+    const { root } = await mount()
+    seatState.loaded = { path: '/w/other.pdf', mediaType: 'application/pdf', sha256: 'a'.repeat(64), annotation: null }
+    await rerender(root, { resourceAddress: 'dsh-resource://file/session/s1/other.pdf' })
+    expect(seatState.loads).toEqual([
+      'dsh-resource://file/session/s1/report.pdf',
+      'dsh-resource://file/session/s1/other.pdf',
+    ])
   })
 })
 

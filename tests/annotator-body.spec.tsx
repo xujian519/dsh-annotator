@@ -563,13 +563,23 @@ describe('zoom', () => {
     expect(surface.style.width).toBe('160px')
   })
 
-  it('hands the scrollport to the owner', async () => {
+  it('hands the owner the scrollport once, and takes it back when the body goes', async () => {
+    // The owner writes the reader's saved scroll position onto whatever it is
+    // handed, so being handed the stage again on every render would put that
+    // position back over wherever the reader had scrolled to — the page jumps
+    // while it is being annotated. The stage crosses once, and null on the way out.
     const owner: (HTMLElement | null)[] = []
-    mounted = await svgBody({}, { scrollportRef: (element) => { owner.push(element) } })
-    // React re-runs a ref callback on every render, so the owner sees the stage
-    // followed by nulls; what matters is that the stage is what it was handed.
-    expect(owner.every(element => element === null || element.className === 'da-stage')).toBe(true)
-    expect(owner.some(element => element?.className === 'da-stage')).toBe(true)
+    const result = await svgBody({}, { scrollportRef: (element) => { owner.push(element) } })
+    mounted = result
+    expect(owner).toHaveLength(1)
+    expect(owner[0]?.className).toBe('da-stage')
+    // A render of its own, and one the owner's own state asks for.
+    await click(button(document.body, zh.annotate))
+    await click(button(document.body, zh.toolPen))
+    expect(owner).toHaveLength(1)
+    await act(async () => { result.root.unmount() })
+    expect(owner).toEqual([owner[0], null])
+    mounted = undefined
   })
 })
 

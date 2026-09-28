@@ -192,6 +192,21 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const stageRef = useRef<HTMLDivElement | null>(null)
   const figureHostRef = useRef<HTMLDivElement | null>(null)
   const surfaceRef = useRef<HTMLDivElement | null>(null)
+
+  /**
+   * Hand the stage to the owner as its scrollport, and keep it here too.
+   *
+   * Stable on purpose. The owner writes the reader's saved scroll position onto
+   * whatever element it is handed, so a callback that changed identity on every
+   * render would hand it the stage again on every render — and put that position
+   * back over wherever the reader has scrolled to since. That is a page jumping
+   * under the pointer while it is being annotated.
+   */
+  const attachStage = useCallback((element: HTMLDivElement | null): void => {
+    stageRef.current = element
+    props.scrollportRef?.(element)
+  }, [props.scrollportRef])
+
   const [fileFigure, setFileFigure] = useState<LoadedFigure | null>(null)
   const [fileRasterSize, setFileRasterSize] = useState<{ readonly width: number; readonly height: number } | null>(null)
   const [figureError, setFigureError] = useState<string | null>(null)
@@ -536,7 +551,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       {stale ? <div className="da-status" data-tone="error">{t('stale')}</div> : null}
       {status === null ? null : <div className="da-status" data-tone={status.tone === 'info' ? undefined : status.tone}>{status.text}</div>}
 
-      <div className="da-stage" ref={(element) => { stageRef.current = element; props.scrollportRef?.(element) }}>
+      <div className="da-stage" ref={attachStage}>
         <div className="da-surface" ref={surfaceRef} style={surfaceStyle}>
           <div style={{ ...figureStyle, position: 'relative' }}>
             {figure?.kind === 'svg' ? (
