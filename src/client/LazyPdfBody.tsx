@@ -7,9 +7,8 @@
  * @module dsh-annotator/client/LazyPdfBody
  */
 import { Suspense, lazy, type ReactNode } from 'react'
-import type { Translate } from './AnnotatorBody'
+import { resolveTranslate, type Translate } from './annotator-contract'
 import type { PdfBodyProps } from './pdf/PdfBody'
-import { fallbackTranslate } from './locales'
 
 /** The chunk's renderer, fetched when this body first mounts. */
 const LoadedPdfBody = lazy(async () => {
@@ -33,7 +32,7 @@ export type LazyPdfBodyProps = Omit<PdfBodyProps, 't'> & {
 export function LazyPdfBody(props: LazyPdfBodyProps): ReactNode {
   // Copy is resolved here: the chunk carries no dictionary, so nothing it needs
   // is shared with this bundle.
-  const t: Translate = (key, vars) => props.t?.(key, vars) ?? fallbackTranslate(props.localeId ?? 'zh', key, vars)
+  const t: Translate = (key, vars) => resolveTranslate(props, key, vars)
   return (
     <Suspense fallback={<p className="da-hint">{t('pdfRendering')}</p>}>
       <LoadedPdfBody {...props} t={t} />

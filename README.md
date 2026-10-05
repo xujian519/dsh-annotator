@@ -2,7 +2,7 @@
 
 DeepSeek Harness 插件：在右侧栏的文档预览里**直接圈画标注**，标注可以**保存**到文档旁边，也可以**填入会话**（作为一条用户消息发给当前会话的智能体），让它按标注去改生成源，而不是靠用户打字描述。
 
-English summary: annotate a document (image, SVG, PDF, HTML, Office) in the right-sidebar preview, save the marks beside the file, and fill them into the session as a user message: a PDF is one document annotated once, written back as native PDF annotations attached to the message.
+English summary: annotate a document (image, SVG, PDF) in the right-sidebar preview, save the marks beside the file, and fill them into the session as a user message: a PDF is one document annotated once, written back as native PDF annotations attached to the message. Markdown is not annotated but edited: the difference against the version it was opened with goes into the session as a unified diff, and nothing is written to disk.
 
 ## 目标范围
 
@@ -13,10 +13,11 @@ English summary: annotate a document (image, SVG, PDF, HTML, Office) in the righ
 | 图片 | `png` `jpg` `jpeg` `gif` `webp` `bmp` `ico` | 已实现 |
 | SVG | `svg` | 已实现（内联渲染，支持图元锚定） |
 | PDF | `pdf` | 已实现（整份文档一份标注：逐页画、一次保存，标注写回原生 PDF 注释对象） |
+| Markdown | `md` `markdown` | 已实现（**编辑**：改完与原文件对比，改动作为 unified diff 送进会话；插件不落盘） |
 | HTML | `html` `htm` | 待实现，仍由内置 HTML 预览器打开 |
 | Office | `doc` `docx` `ppt` `pptx` `xls` `xlsx` | 待实现，仍由内置 Office 预览器打开 |
 
-「保存」= 把标注写进文档旁边的侧车文件；「填入会话」= 把标注（以及标注图、带批注的 PDF 副本）作为一条用户消息发进当前会话。目前**图片、SVG 与 PDF 走通了完整链路**，HTML/Office 尚未接入标注。
+「保存」= 把标注写进文档旁边的侧车文件（Markdown 不落盘，见下）；「填入会话」= 把标注（以及标注图、带批注的 PDF 副本、Markdown 的 diff）作为一条用户消息发进当前会话。目前**图片、SVG、PDF 与 Markdown 走通了完整链路**，HTML/Office 尚未接入。
 
 ## 它解决的问题
 
@@ -52,6 +53,12 @@ DSH_HOME=/tmp/dsh-annotatordev node --import tsx/esm apps/cli/src/bin.ts --profi
 3. 画完自动选中该标注，在「说明」里写一句话（例如「这个标号应指向滑套 34」）；「总体说明」写这次要改什么。
 4. 「仅保存」只落盘；「保存并提交给智能体」落盘后把标注作为一条用户消息发进当前会话。
 
+Markdown 走另一条路（**编辑**，不是标注）：预览里直接改源文本，「对比」看这一版与打开时那一版的逐行差异（unified diff，两侧行号齐全），「送至会话」把这份 diff 作为一条用户消息发出去。**插件不写这个文件**：智能体拿到 diff 后自行落地到源文件，磁盘上的 md 在提交前后都是旧版。差异超过 400 行时，消息只展开前面几处，完整结果作为 `<文件名>.edited.md` 附件随消息发送。
+
+对比视图里每一处改动下面都有一行**说明**输入框（「第 N 行起这一处的说明」）：写一句"为什么这么改"，它会作为消息里的「我的说明：」清单随 diff 一起发给智能体；说明挂在**基线侧的行号**上，所以你继续改别处时它不会漂。工具栏另有两个小工具：「复制 diff」把整份 unified diff 放进剪贴板（是完整那份，不是消息里被裁过的），以及常显的**光标位置**「第 N 行 · 第 M 列」。
+
+编辑视图**在关闭「自动换行」后显示行号槽**（换行开关是文档工具栏那个）。开着换行时不显示行号，因为一行会占多个视觉行、行号必然与它对不上——那种情况下用工具栏的行列读数。
+
 SVG 图会**内联渲染**，因此标注能锚定到图元：Graphviz 产出的节点（`<g><title>102</title>`）会被识别为「元素标题 102」，圈到某个标号文字上则记为该文字的标签。
 
 PDF 是**一份文档一次标注**：上排工具栏翻页（`3 / 12` 与「共 12 页 · 5 处标注」），每页各自画、各自撤销，翻页时已画的内容不会丢也不会串页；「仅保存」/「保存并提交给智能体」是**整份文档**的两个动作，各只按一次。
@@ -65,6 +72,7 @@ PDF 是**一份文档一次标注**：上排工具栏翻页（`3 / 12` 与「共
 | `<文件名>.annot.json` | 标注文档：文档信息（绝对路径、sha256，PDF 另有 `pageCount`）、`marks[]`（kind/color/points/page/anchor/text）、总体说明 |
 | `<文件名>.annotated.png` | 图片/SVG：原图 + 标注的合成图（2 倍分辨率），随消息作为图片附件发给模型 |
 | `<文件名>.annotated.pdf` | PDF：原件副本，标注写成**原生 PDF 注释对象**，同时作为附件随消息发送 |
+| （无） | Markdown：**不在磁盘上留任何东西**。改动以 unified diff 进会话；只有 diff 超出消息预算时才把 `<文件名>.edited.md` 作为附件发送（附件存在会话的附件库里，不落在文档旁边） |
 
 两个名字都**带着被标注文件自己的扩展名**（`fig1.svg` → `fig1.svg.annot.json`）：同目录下同主名不同后缀的两份文件各有各的标注，绝不会互相读成对方的那一份。
 
@@ -89,6 +97,12 @@ PDF 是**一份文档一次标注**：上排工具栏翻页（`3 / 12` 与「共
 - **PDF 标注只写原生注释对象**：不做「把标记烧进页面内容」的副本。好处是标记在阅读器里仍可编辑/删除、页面内容不被改写；代价是只画内容不画注释的渲染器（例如把页面转成位图的自制流程）看不到标记——那种场合请用消息里附的每页图片。
 - **不做 PDF 文本层与连续滚动**：一次一页，翻页按钮在文档工具栏上；页内文字不可选、不可搜。
 - **HTML、Office 文档尚未接入标注**，仍由内置预览处理（见「目标范围」）。
+- **Markdown 的差异基线是「你打开时的那一版」**，不是 git 的 HEAD：它由所有者交下来的文本冻结而来，所以与 `git diff` 的语义不同（你可能已经提交过中间状态）。文件在编辑期间被改动时，插件会警告这份 diff 基于较早的版本。
+- **基线取的是所有者交付的文本**：shell 按页交付 Markdown 时会去掉文件末尾的换行，所以"只改了末尾换行"这种改动在这条链路上看不到（与上一条同因）。
+- **Markdown 接管了默认预览**：读 md 时看到的是源文本与编辑器，不是渲染结果；需要渲染预览时从查看器下拉切回内置实现。
+- **Markdown 只有行级差异**：`@@` 头与行号都以行为单位；只改了文件末尾换行这类「行内看不到的差异」，对比区会显示为没有改动。
+- **Markdown 没有语法高亮**：编辑框是原生 `<textarea>`（因此插件至今零新增运行时依赖）。加高亮要引入 CodeMirror 并新开一个懒加载分块，作为独立一步评估。
+- **说明只随消息走，不落盘**：它是消息的一部分，插件不保存它；消息发出后只有会话日志里有。
 - **带批注的 PDF 是派生产物**：它由浏览器半边在保存时生成，原件被重新生成后需要重新保存一次才会同步。
 - **提交即一条用户消息**：模型能否直接看到标注图取决于会话路由是否声明图像输入；不支持时会降级为占位文本，此时结构化标注与标注图路径仍是完整信息源（可用 `analyze_patent_figure` 或图像输入模型回看）。
 - **未做 Excalidraw 模式**：这是既定的一期范围；一期自研轻量标注层，二期再评估把 Excalidraw 作为自由批注模式接在同一条提交链路上。

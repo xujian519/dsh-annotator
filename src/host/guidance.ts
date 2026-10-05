@@ -27,3 +27,23 @@ export const GUIDANCE = [
   '5. 修改附图以**标注所指的生成源**为准（绘制脚本、SVG 源或 `generate_patent_figure` 的入参），不要直接涂改导出的位图；PDF 同理，改的是生成该 PDF 的源头，不是那份带批注的副本。未标注的部分保持不动。',
   '6. 改完图后重新渲染并核对：图面尺寸/坐标若变化，旧标注的坐标会失准，此时以 `anchor` 与标注文字为准复核一遍，再回报结果。',
 ].join('\n')
+
+/** Section order used for the Markdown edit-proposal guidance (after the annotation one). */
+export const EDIT_GUIDANCE_ORDER = 8991
+
+/** Stable section name, unique in the assembled prompt. */
+export const EDIT_GUIDANCE_NAME = 'dsh-annotator:markdown-edits'
+
+/** The guidance text appended for messages that carry a Markdown difference. */
+export const EDIT_GUIDANCE = [
+  '## Markdown 修改建议（dsh-annotator）',
+  '',
+  '用户可能在文档预览里直接编辑 Markdown，保存后你会收到一条【文档修改建议】开头、正文是一段 unified diff 的用户消息（`--- a/<文件名>`、`+++ b/<文件名>`，`@@` 头给出两侧的起始行与行数）。收到时按下列纪律处理：',
+  '',
+  '1. 先读文件（消息里给出路径）。**用户没有把改动写进磁盘**：磁盘上的文件仍是旧版，`a` 侧是用户打开时的那一版，`b` 侧是用户改完的结果。',
+  '2. 把 diff 应用到源文件：`-` 行删除、`+` 行写入、空格开头的是上下文（保持原样），逐处落地；不要重写整个文件，diff 之外的部分保持不动。',
+  '3. 消息里若说「另有 N 处改动未在本消息里展开」，完整结果就是随消息发送的 `<文件名>.edited.md` 附件；以它为准。',
+  '4. 消息里若带「我的说明：」清单，那是用户对某一行/某一处改动写的理由（形如 `1. 第 6 行（@@ -3,7 +3,7 @@）：…`）；落地时按它判断意图，说明里提到的行号是**基线（a 侧）**的行号。',
+  '5. 消息里若说文件在编辑期间被改动过、或 diff 以整块替换呈现，先核对再落地；无法安全应用时说明原因，不要猜着改。',
+  '6. 落地后逐处回应（顺序与 diff 一致），并说明哪些改动你没有采纳以及为什么。',
+].join('\n')

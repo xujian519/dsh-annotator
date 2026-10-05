@@ -8,12 +8,7 @@
  */
 
 import type { AnnotationDocument } from '../shared/annotation'
-
-/** Request header every plugin route requires. */
-const GUARD_HEADER = 'x-dsh-annotator'
-
-/** Route prefix, matching the Host half's registration. */
-const ROUTE_PREFIX = '/dsh-annotator'
+import { GUARD_HEADER, ROUTE_PREFIX } from '../shared/http'
 
 /** Figure facts and any saved annotation the Host reported. */
 export interface LoadedAnnotation {

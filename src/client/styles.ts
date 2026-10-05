@@ -60,6 +60,26 @@ export const STYLES = `
 .da-status[data-tone="error"]{color:var(--dsw-alias-state-error-primary,currentColor)}
 .da-status[data-tone="ok"]{color:var(--dsw-alias-state-success-primary,currentColor)}
 .da-hint{padding:8px;font-size:12px;color:var(--dsw-alias-label-tertiary,inherit)}
+/* The Markdown body: an editor over the source, or the difference it produced. */
+.da-md{display:flex;flex-direction:column;height:100%;min-height:0}
+.da-md-stats{flex:0 0 auto;font-size:12px;white-space:nowrap;color:var(--dsw-alias-label-secondary,inherit)}
+/* The editor pane: the textarea, and the gutter that only exists while the
+   document toolbar's wrap preference is off (a wrapped line has no one row). */
+.da-md-pane{flex:1 1 auto;display:flex;min-height:0;background:var(--dsw-alias-bg-base,transparent)}
+.da-md-gutter{flex:0 0 auto;overflow:hidden;padding:8px 6px 8px 10px;text-align:right;color:var(--dsw-alias-label-tertiary,inherit);font-size:12px;line-height:1.6;font-family:var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace);user-select:none}
+.da-md-editor{flex:1 1 auto;min-height:0;width:100%;padding:8px 10px;border:none;outline:none;resize:none;background:var(--dsw-alias-bg-base,transparent);color:inherit;font-size:12px;line-height:1.6;tab-size:2;font-family:var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
+.da-diff{flex:1 1 auto;min-height:0;overflow:auto;padding:4px 0;font-size:12px;line-height:1.6;font-family:var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
+.da-diff-head{padding:2px 8px;color:var(--dsw-alias-label-tertiary,inherit);background:var(--dsw-alias-bg-layer-2,transparent)}
+.da-diff-line{display:flex;gap:6px;padding:0 8px}
+.da-diff-no{flex:0 0 auto;min-width:32px;text-align:right;color:var(--dsw-alias-label-tertiary,inherit);user-select:none}
+.da-diff-sign{flex:0 0 auto;width:8px}
+.da-diff-text{flex:1 1 auto;white-space:pre-wrap;word-break:break-word}
+.da-diff-line[data-kind="add"] .da-diff-sign{color:var(--dsw-alias-state-success-primary,currentColor)}
+.da-diff-line[data-kind="remove"] .da-diff-sign{color:var(--dsw-alias-state-error-primary,currentColor)}
+/* One note field per hunk: the reader's explanation of that change. */
+.da-diff-note{display:flex;align-items:center;gap:6px;padding:2px 8px 8px 8px;color:var(--dsw-alias-label-tertiary,inherit);font-size:12px}
+.da-diff-note-label{flex:0 0 auto;white-space:nowrap}
+.da-diff-note input{flex:1 1 auto;min-width:0;border:0.5px solid var(--dsw-alias-border-l2,currentColor);border-radius:var(--dsw-radius-sm,6px);background:var(--dsw-alias-bg-base,transparent);color:inherit;font:inherit;font-size:12px;padding:3px 6px}
 `
 
 /**

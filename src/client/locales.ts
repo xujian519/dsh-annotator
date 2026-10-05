@@ -6,7 +6,7 @@
  * @module dsh-annotator/client/locales
  */
 
-import type { TranslateVars } from './AnnotatorBody'
+import type { TranslateVars } from './annotator-contract'
 
 /** Chinese copy (the product's primary language). */
 export const zh = {
@@ -54,6 +54,29 @@ export const zh = {
   pdfOpenFailed: '打开 PDF 失败：',
   documentScope: '共 {pages} 页 · {marks} 处批注',
   notReady: '还没有读取到这个 PDF 的宿主信息，请稍后再试。',
+  mdTitle: 'Markdown 编辑',
+  editMode: '编辑',
+  diffMode: '对比',
+  diffEmpty: '没有改动',
+  editLoading: '正在载入 Markdown…',
+  editLines: '共 {lines} 行',
+  editStats: '改动 {hunks} 处 · +{added} −{removed} 行',
+  discardEdit: '放弃修改',
+  sendEdit: '送至会话',
+  editSending: '正在提交…',
+  editSent: '已提交给智能体（没有落盘）',
+  editSendError: '提交失败：',
+  editUnavailable: '当前组合没有会话服务，无法提交。',
+  editNoSession: '这个文档的地址没有指向任何会话，无法提交。',
+  editEofPending: '文件还没有读完；现在所做的修改以已载入的部分为基线。',
+  editStale: '载入的内容在编辑期间变了（文件在磁盘上被改动过）：这份改动基于较早的版本，提交前请核对。',
+  caretAt: '第 {line} 行 · 第 {column} 列',
+  copyDiff: '复制 diff',
+  diffCopied: '已复制这份 diff',
+  copyFailed: '复制失败：',
+  copyUnavailable: '这个环境没有剪贴板接口',
+  hunkNote: '第 {line} 行起这一处的说明',
+  hunkNotePlaceholder: '可选：为什么这么改（会随 diff 一起发给智能体）',
 } as const
 
 /** English copy. */
@@ -102,6 +125,29 @@ export const en: Record<keyof typeof zh, string> = {
   pdfOpenFailed: 'Opening the PDF failed: ',
   documentScope: '{pages} pages · {marks} marks',
   notReady: "This PDF's Host facts are not loaded yet; try again in a moment.",
+  mdTitle: 'Markdown editor',
+  editMode: 'Edit',
+  diffMode: 'Diff',
+  diffEmpty: 'No change',
+  editLoading: 'Loading Markdown…',
+  editLines: '{lines} lines',
+  editStats: '{hunks} hunks · +{added} −{removed} lines',
+  discardEdit: 'Discard',
+  sendEdit: 'Send to agent',
+  editSending: 'Sending…',
+  editSent: 'Sent to the agent (nothing was written to disk)',
+  editSendError: 'Sending failed: ',
+  editUnavailable: 'This composition has no session service, so the edit cannot be sent.',
+  editNoSession: 'This document’s address names no session, so the edit cannot be sent.',
+  editEofPending: 'The file is not fully loaded yet; edits are diffed against the part that is.',
+  editStale: 'The loaded content changed while you were editing (the file was modified on disk): this change is against an earlier version, so check it before sending.',
+  caretAt: 'line {line} · col {column}',
+  copyDiff: 'Copy diff',
+  diffCopied: 'The diff is on the clipboard',
+  copyFailed: 'Copying failed: ',
+  copyUnavailable: 'this environment has no clipboard API',
+  hunkNote: 'Note for the change at line {line}',
+  hunkNotePlaceholder: 'Optional: why this change (it travels with the diff)',
 }
 
 /** Locale namespace this dictionary registers under. */

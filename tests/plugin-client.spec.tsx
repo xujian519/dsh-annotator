@@ -3,7 +3,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it, vi } from 'vitest'
 import { AnnotatorBody } from '../src/client/AnnotatorBody'
 import { LazyPdfBody } from '../src/client/LazyPdfBody'
-import { BODY_ID, PDF_BODY_ID, apply, inject, name } from '../src/client/index'
+import { BODY_ID, MD_BODY_ID, PDF_BODY_ID, apply, inject, name } from '../src/client/index'
+import { MarkdownBody } from '../src/client/markdown/MarkdownBody'
 import { NAMESPACE, en, zh } from '../src/client/locales'
 import { missingService } from '../src/missing-service'
 import { defined } from './dom'
@@ -30,6 +31,7 @@ function stubContext(options: {
   readonly omit?: readonly string[]
   readonly localeId?: string | undefined
   readonly sessions?: unknown
+  readonly fileUpload?: unknown
 } = {}): {
   readonly ctx: Context
   readonly definitions: StubDefinition[]
@@ -70,6 +72,7 @@ function stubContext(options: {
       },
     },
     sessions: options.sessions,
+    fileUpload: options.fileUpload,
   }
   const ctx = {
     get: (key: string) => (omitted.has(key) ? undefined : services[key]),
@@ -84,11 +87,11 @@ describe('browser entry', () => {
     expect(inject).toEqual(['slots', 'locale', 'documentPreviews'])
   })
 
-  it('registers both dictionaries, both renderer kinds, and both bodies', () => {
+  it('registers both dictionaries, all three renderer kinds, and all three bodies', () => {
     const stub = stubContext()
     apply(stub.ctx)
     expect(stub.dictionaries).toEqual([{ namespace: NAMESPACE, zh, en }])
-    expect(stub.definitions).toHaveLength(2)
+    expect(stub.definitions).toHaveLength(3)
     expect(stub.definitions[0]).toMatchObject({
       id: BODY_ID,
       priority: 'extension',
@@ -109,7 +112,24 @@ describe('browser entry', () => {
       loading: 'bytes-complete',
       wrap: false,
     })
-    expect(stub.injectedKeys).toEqual(['sidebar.right.tab.document', 'sidebar.right.tab.document'])
+    // Markdown is a text-pages implementation: the owner hands it the source as
+    // it reads it, and the body edits that text without ever writing the file.
+    expect(stub.definitions[2]).toMatchObject({
+      id: MD_BODY_ID,
+      extensions: ['md', 'markdown'],
+      priority: 'extension',
+      loading: 'text-pages',
+      wrap: true,
+    })
+    expect(stub.injectedKeys).toEqual([
+      'sidebar.right.tab.document', 'sidebar.right.tab.document', 'sidebar.right.tab.document',
+    ])
+    expect(stub.slots[2]?.options).toMatchObject({
+      name: 'sidebar.right.tab.document',
+      key: MD_BODY_ID,
+      locale: NAMESPACE,
+    })
+    expect(stub.slots[2]?.component).toBe(MarkdownBody)
     expect(stub.slots[0]?.options).toMatchObject({
       name: 'sidebar.right.tab.document',
       key: BODY_ID,
@@ -129,6 +149,7 @@ describe('browser entry', () => {
     apply(stub.ctx)
     expect(stub.definitions[0]?.title()).toBe(`${NAMESPACE}.title`)
     expect(stub.definitions[1]?.title()).toBe(`${NAMESPACE}.pdfTitle`)
+    expect(stub.definitions[2]?.title()).toBe(`${NAMESPACE}.mdTitle`)
   })
 
   it('injects the session face, the session id, and the active locale id', () => {
@@ -139,6 +160,22 @@ describe('browser entry', () => {
     expect(typeof factory).toBe('function')
     const injected = (factory as (id: unknown) => unknown)(123)
     expect(injected).toEqual({ sessions, sessionId: '123', localeId: 'en-US' })
+  })
+
+  it('hands the Markdown editor the upload service a long difference needs', () => {
+    const sessions = { scope: () => undefined }
+    const fileUpload = { upload: () => undefined }
+    const stub = stubContext({ sessions, fileUpload })
+    apply(stub.ctx)
+    const factory = stub.slots[2]?.options['inject'] as (id: unknown) => unknown
+    expect(factory(7)).toEqual({ sessions, fileUpload, sessionId: '7', localeId: 'zh' })
+  })
+
+  it('leaves the Markdown editor without an upload service the composition omits', () => {
+    const stub = stubContext()
+    apply(stub.ctx)
+    const factory = stub.slots[2]?.options['inject'] as (id: unknown) => { fileUpload: unknown }
+    expect(factory('s1').fileUpload).toBeUndefined()
   })
 
   it('hands the PDF chunk the seats it cannot import from this bundle', () => {

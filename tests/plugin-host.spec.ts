@@ -3,7 +3,14 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { describe, expect, it } from 'vitest'
 import { apply, inject, name } from '../src/index'
-import { GUIDANCE, GUIDANCE_NAME, GUIDANCE_ORDER } from '../src/host/guidance'
+import {
+  EDIT_GUIDANCE,
+  EDIT_GUIDANCE_NAME,
+  EDIT_GUIDANCE_ORDER,
+  GUIDANCE,
+  GUIDANCE_NAME,
+  GUIDANCE_ORDER,
+} from '../src/host/guidance'
 import { GUARD_HEADER, ROUTE_PREFIX } from '../src/host/routes'
 import { missingService } from '../src/missing-service'
 
@@ -59,19 +66,21 @@ describe('host entry', () => {
     expect(inject).toEqual(['webServer', 'systemPrompt'])
   })
 
-  it('mounts the guard-protected route prefix and the agent guidance', () => {
+  it('mounts the guard-protected route prefix and both guidance sections', () => {
     const stub = stubContext()
     apply(stub.ctx)
     expect(stub.routes).toHaveLength(1)
     expect(stub.routes[0]).toMatchObject({ kind: 'prefix', path: ROUTE_PREFIX })
     expect(typeof stub.routes[0]?.handler).toBe('function')
-    expect(stub.sections).toEqual([{
-      name: GUIDANCE_NAME,
-      order: GUIDANCE_ORDER,
-      text: GUIDANCE,
-      stable: true,
-    }])
-    expect(stub.labels).toEqual(['dsh-annotator: annotation route', 'dsh-annotator: guidance'])
+    expect(stub.sections).toEqual([
+      { name: GUIDANCE_NAME, order: GUIDANCE_ORDER, text: GUIDANCE, stable: true },
+      // The agent has to know the difference a Markdown message carries, and that
+      // the file on disk is still the old version until it applies it.
+      { name: EDIT_GUIDANCE_NAME, order: EDIT_GUIDANCE_ORDER, text: EDIT_GUIDANCE, stable: true },
+    ])
+    expect(stub.labels).toEqual([
+      'dsh-annotator: annotation route', 'dsh-annotator: guidance', 'dsh-annotator: edit guidance',
+    ])
   })
 
   it('registers both contributions through ctx.effect, so they can be taken back', () => {

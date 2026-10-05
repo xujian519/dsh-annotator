@@ -51,3 +51,12 @@ export function parseFileAddress(address: string): FileAddress | undefined {
   if (rest.startsWith('absolute/')) return { path: decodeSegment(rest.slice('absolute/'.length)) }
   return undefined
 }
+
+/**
+ * The last segment of a path, whatever separators it uses.
+ * @param path - a POSIX- or Windows-separated path.
+ * @returns the path's file name.
+ */
+export function baseNameOf(path: string): string {
+  return path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1)
+}

@@ -12,7 +12,7 @@
  */
 import { useCallback, useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import type { AnnotationMark } from '../../shared/annotation'
-import type { AnnotatorBodyProps, BodyContent, SurfaceDraft, Translate } from '../AnnotatorBody'
+import type { AnnotatorBodyProps, BodyContent, SurfaceDraft, Translate } from '../annotator-contract'
 import type { DocumentSeat, PageImage, PagedAnnotationInput } from '../document-seat'
 import { annotatePdf, type PageAnnotateInput } from './annotate'
 import { openPdf, type PdfDocument } from './runtime'

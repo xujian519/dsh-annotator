@@ -4,7 +4,9 @@
  * It registers one document renderer per annotatable kind — images and PDFs —
  * so opening either in the right Sidebar offers the annotator, and registers
  * each renderer's body in the keyed document slot. The PDF body lives in a
- * package-local chunk that is fetched only when a PDF opens.
+ * package-local chunk that is fetched only when a PDF opens. Markdown is
+ * registered the same way, but its body edits the source in place and delivers
+ * the difference instead of drawing on a surface.
  * Everything else — reading the figure bytes, storing marks, reaching the agent —
  * happens inside a body through the owner and the injected session service.
  *
@@ -19,6 +21,7 @@ import { AnnotatorBody } from './AnnotatorBody'
 import type { AnnotatorInjected } from './AnnotatorBody'
 import { createDocumentSeat } from './document-seat'
 import { LazyPdfBody } from './LazyPdfBody'
+import { MarkdownBody, type MarkdownInjected } from './markdown/MarkdownBody'
 import { NAMESPACE, en, zh } from './locales'
 import { missingService } from '../missing-service'
 import type { PdfBodyInjected } from './pdf/PdfBody'
@@ -35,6 +38,12 @@ export const BODY_ID = 'dsh-annotator/image'
 
 /** Implementation identity of the PDF renderer, shared by its metadata and its slot entry. */
 export const PDF_BODY_ID = 'dsh-annotator/pdf'
+
+/** Implementation identity of the Markdown editor, shared by its metadata and its slot entry. */
+export const MD_BODY_ID = 'dsh-annotator/markdown'
+
+/** Suffixes the Markdown editor claims for whole-file text documents. */
+const MD_EXTENSIONS = ['md', 'markdown'] as const
 
 /** Suffixes the annotator claims for whole-file figures, matching the shell's builtin image renderer. */
 const EXTENSIONS = ['svg', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico'] as const
@@ -135,4 +144,25 @@ export function apply(ctx: Context): void {
       }),
     }),
   }, LazyPdfBody)), 'dsh-annotator: pdf document body')
+  ctx.effect(() => previews.register({
+    id: MD_BODY_ID,
+    extensions: MD_EXTENSIONS,
+    priority: 'extension',
+    title: () => locale.bind(NAMESPACE)('mdTitle'),
+    loading: 'text-pages',
+    wrap: true,
+  }), 'dsh-annotator: markdown renderer metadata')
+  ctx.effect(() => slots.inject('sidebar.right.tab.document', () => slots.register({
+    name: 'sidebar.right.tab.document',
+    key: MD_BODY_ID,
+    locale: NAMESPACE,
+    // The editor never writes the document: it hands the Session the difference
+    // between what it loaded and what the reader made of it.
+    inject: (sessionId: unknown): MarkdownInjected => ({
+      sessions: ctx.get('sessions') as SessionsLike | undefined,
+      fileUpload: ctx.get('fileUpload') as FileUploadLike | undefined,
+      sessionId: String(sessionId),
+      localeId: locale.getLocale().locale ?? 'zh',
+    }),
+  }, MarkdownBody)), 'dsh-annotator: markdown document body')
 }

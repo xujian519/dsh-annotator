@@ -12,6 +12,7 @@ import { stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { isAbsolute, resolve } from 'node:path'
 import { parseFileAddress } from '../shared/address'
+import { GUARD_HEADER } from '../shared/http'
 import {
   figureMediaType,
   isFigurePath,
@@ -25,11 +26,7 @@ import {
   type ReviewArtifact,
 } from './store'
 
-/** Request header every route requires. */
-export const GUARD_HEADER = 'x-dsh-annotator'
-
-/** Route prefix owned by this plugin. */
-export const ROUTE_PREFIX = '/dsh-annotator'
+export { GUARD_HEADER, ROUTE_PREFIX } from '../shared/http'
 
 /** Largest accepted request body. */
 const MAX_BODY_BYTES = MAX_REVIEW_BYTES * 2
