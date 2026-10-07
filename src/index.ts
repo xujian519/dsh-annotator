@@ -20,7 +20,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { EDIT_GUIDANCE, EDIT_GUIDANCE_NAME, EDIT_GUIDANCE_ORDER, GUIDANCE, GUIDANCE_NAME, GUIDANCE_ORDER } from './host/guidance'
 import { ROUTE_PREFIX, createHandlers } from './host/routes'
-import { resolveSessionCwd, type AgentsFace, type SessionPersistenceFace, type WorkspaceRegistryFace } from './host/session-cwd'
+import { resolveSessionCwd, type AgentsFace, type SessionCwdSources, type SessionPersistenceFace, type WorkspaceRegistryFace } from './host/session-cwd'
 import { missingService } from './missing-service'
 
 /** Plugin name, as the Loader entry and diagnostics spell it. */
@@ -57,13 +57,22 @@ export function apply(ctx: Context): void {
   const systemPrompt = ctx.get('systemPrompt') as SystemPromptLike | undefined
   if (webServer === undefined) throw new Error(missingService('webServer'))
   if (systemPrompt === undefined) throw new Error(missingService('systemPrompt'))
-  const sources = {
+  /**
+   * Read the Host sources a Session's directory may be resolved from.
+   *
+   * Read per request, never captured when this row mounts: the plugin's own
+   * `inject` set is satisfied early (the web server and the prompt registry),
+   * while the session store and the workspace registry mount later in the same
+   * composition. A capture at mount time would freeze them as absent and take
+   * every session-relative preview address down with it.
+   */
+  const sources = (): SessionCwdSources => ({
     agents: ctx.get('agents') as AgentsFace | undefined,
     sessionPersistence: ctx.get('sessionPersistence') as SessionPersistenceFace | undefined,
     workspaceRegistry: ctx.get('workspaceRegistry') as WorkspaceRegistryFace | undefined,
-  }
+  })
   const handlers = createHandlers({
-    sessionCwd: (sessionId) => resolveSessionCwd(sessionId, sources),
+    sessionCwd: (sessionId) => resolveSessionCwd(sessionId, sources()),
   })
   ctx.effect(
     () => webServer.register({ kind: 'prefix', path: ROUTE_PREFIX, handler: handlers.annotation }),

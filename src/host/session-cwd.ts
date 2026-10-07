@@ -13,7 +13,14 @@
 
 /** The live-agent directory, as this plugin reads it. */
 export interface AgentsFace {
-  get(id: string): { readonly session?: { readonly cwd?: string } } | undefined
+  get(id: string): {
+    readonly session?: {
+      /** The live Session's own creation metadata, where it keeps the directory. */
+      readonly header?: { readonly cwd?: string }
+      /** The directory on a Session that exposes it directly (older harnesses). */
+      readonly cwd?: string
+    }
+  } | undefined
 }
 
 /** Durable Session headers, as this plugin reads them. */
@@ -46,8 +53,11 @@ export async function resolveSessionCwd(
   sessionId: string,
   sources: SessionCwdSources,
 ): Promise<string | undefined> {
-  const live = sources.agents?.get(sessionId)?.session?.cwd
-  if (live !== undefined && live !== '') return live
+  const live = sources.agents?.get(sessionId)?.session
+  // A live Session keeps its directory in its creation header; the flat field is
+  // where harness versions before that header kept it.
+  const liveCwd = live?.header?.cwd ?? live?.cwd
+  if (liveCwd !== undefined && liveCwd !== '') return liveCwd
   try {
     const stored = await sources.sessionPersistence?.stat(sessionId)
     const cwd = stored?.header?.cwd

@@ -122,11 +122,25 @@ describe('sidecar paths', () => {
 describe('session directory resolution', () => {
   it('prefers the live agent header', async () => {
     const cwd = await resolveSessionCwd('s1', {
-      agents: { get: () => ({ session: { cwd: '/live' } }) },
+      agents: { get: () => ({ session: { header: { cwd: '/live' } } }) },
       sessionPersistence: { stat: async () => ({ header: { cwd: '/stored' } }) },
       workspaceRegistry: { list: () => [{ path: '/ws', sessionIds: ['s1'] }] },
     })
     expect(cwd).toBe('/live')
+  })
+
+  it('reads a live session that carries its directory flat instead of in a header', async () => {
+    const cwd = await resolveSessionCwd('s1', {
+      agents: { get: () => ({ session: { cwd: '/flat' } }) },
+    })
+    expect(cwd).toBe('/flat')
+  })
+
+  it('reads a live session that has no directory at all as nothing', async () => {
+    const cwd = await resolveSessionCwd('s1', {
+      agents: { get: () => ({ session: {} }) },
+    })
+    expect(cwd).toBeUndefined()
   })
 
   it('falls back to the stored header when no agent is live', async () => {
