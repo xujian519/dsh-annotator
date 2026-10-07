@@ -37,6 +37,9 @@ const MAX_ANNOTATION_BYTES = 4 * 1024 * 1024
 /** Maximum accepted flattened review artifact. */
 export const MAX_REVIEW_BYTES = 24 * 1024 * 1024
 
+/** Longest element selector one anchor may carry. */
+const MAX_SELECTOR_CHARS = 400
+
 /** Kinds a mark may declare. */
 const MARK_KINDS: readonly MarkKind[] = ['arrow', 'rect', 'ellipse', 'pen', 'text']
 
@@ -85,6 +88,10 @@ function readAnchor(value: unknown): MarkAnchor | undefined {
     ...(typeof raw['id'] === 'string' ? { id: raw['id'] } : {}),
     ...(typeof raw['title'] === 'string' ? { title: raw['title'] } : {}),
     ...(typeof raw['text'] === 'string' ? { text: raw['text'] } : {}),
+    // A selector is a path into a document the browser read, so it is capped like
+    // every other field the browser sends: an anchor beyond this is not one this
+    // plugin wrote.
+    ...(typeof raw['selector'] === 'string' ? { selector: raw['selector'].slice(0, MAX_SELECTOR_CHARS) } : {}),
   }
   return anchor
 }

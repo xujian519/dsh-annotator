@@ -77,6 +77,10 @@ export const zh = {
   copyUnavailable: '这个环境没有剪贴板接口',
   hunkNote: '第 {line} 行起这一处的说明',
   hunkNotePlaceholder: '可选：为什么这么改（会随 diff 一起发给智能体）',
+  htmlTitle: 'HTML 标注',
+  htmlLoading: '正在载入 HTML…',
+  htmlFrame: 'HTML 预览',
+  htmlStale: '这份 HTML 在上次标注之后已经改过，旧标注的元素定位可能失准，请核对后再提交。',
 } as const
 
 /** English copy. */
@@ -148,6 +152,10 @@ export const en: Record<keyof typeof zh, string> = {
   copyUnavailable: 'this environment has no clipboard API',
   hunkNote: 'Note for the change at line {line}',
   hunkNotePlaceholder: 'Optional: why this change (it travels with the diff)',
+  htmlTitle: 'HTML annotations',
+  htmlLoading: 'Loading HTML…',
+  htmlFrame: 'HTML preview',
+  htmlStale: 'This HTML changed since it was annotated, so old marks may name the wrong elements. Check them before sending.',
 }
 
 /** Locale namespace this dictionary registers under. */

@@ -45,11 +45,13 @@ describe('file addresses', () => {
   })
 })
 
-describe('figure suffixes', () => {
+describe('document suffixes', () => {
   it('recognizes the renderable suffixes', () => {
     expect(isFigurePath('/a/b/FIG1.SVG')).toBe(true)
     expect(isFigurePath('图1.png')).toBe(true)
     expect(isFigurePath('/a/b/report.pdf')).toBe(true)
+    expect(isFigurePath('/a/b/report.html')).toBe(true)
+    expect(isFigurePath('/a/b/report.HTM')).toBe(true)
     expect(isFigurePath('/a/b/notes.md')).toBe(false)
     expect(isFigurePath('/a/b/noextension')).toBe(false)
     expect(suffixOf('/a/b/.hidden')).toBe('')
@@ -65,6 +67,8 @@ describe('figure suffixes', () => {
     expect(figureMediaType('a.gif')).toBe('image/gif')
     expect(figureMediaType('a.ico')).toBe('image/x-icon')
     expect(figureMediaType('a.pdf')).toBe('application/pdf')
+    expect(figureMediaType('a.html')).toBe('text/html')
+    expect(figureMediaType('a.htm')).toBe('text/html')
     expect(figureMediaType('a.txt')).toBeUndefined()
   })
 

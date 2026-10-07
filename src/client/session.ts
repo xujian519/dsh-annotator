@@ -116,18 +116,31 @@ export function buildAnnotationMessage(
   const zh = locale === 'zh'
   const { figure, marks } = document
   const scope = describeFigureScope(figure, locale)
+  // A rendered document is measured in the pixels it was laid out in, and it has
+  // no picture: the marks file and the locators inside it are the whole payload.
+  const rendered = figure.mediaType === 'text/html'
   const size = figure.width === undefined || figure.height === undefined
     ? ''
-    : (zh
-      ? `图面 ${Math.round(figure.width)}×${Math.round(figure.height)}，`
-      : `figure ${Math.round(figure.width)}x${Math.round(figure.height)}, `)
+    : rendered
+      ? (zh
+        ? `渲染面 ${Math.round(figure.width)}×${Math.round(figure.height)}，`
+        : `rendered surface ${Math.round(figure.width)}x${Math.round(figure.height)}, `)
+      : (zh
+        ? `图面 ${Math.round(figure.width)}×${Math.round(figure.height)}，`
+        : `figure ${Math.round(figure.width)}x${Math.round(figure.height)}, `)
   const pages = annotatedPages(document)
   const marked = pages.length === 0
     ? ''
     : (zh ? `其中 ${pages.length} 页有标注，` : `${pages.length} pages marked, `)
+  const kind = rendered
+    ? (zh ? '【HTML 标注】' : '[HTML annotations]')
+    : (zh ? '【附图标注】' : '[figure annotations]')
+  const hash = zh
+    ? `${rendered ? '文件' : '图'} sha256:${figure.sha256.slice(0, 12)}`
+    : `sha256:${figure.sha256.slice(0, 12)}`
   const header = zh
-    ? `【附图标注】${figure.path}（${scope === '' ? '' : `${scope}，`}${size}${marked}标注 ${marks.length} 处，图 sha256:${figure.sha256.slice(0, 12)}）`
-    : `[figure annotations] ${figure.path} (${scope === '' ? '' : `${scope}, `}${size}${marked}${marks.length} marks, sha256:${figure.sha256.slice(0, 12)})`
+    ? `${kind}${figure.path}（${scope === '' ? '' : `${scope}，`}${size}${marked}标注 ${marks.length} 处，${hash}）`
+    : `${kind} ${figure.path} (${scope === '' ? '' : `${scope}, `}${size}${marked}${marks.length} marks, ${hash})`
   const paged = figure.pageCount !== undefined
   const files = [
     zh ? `标注文件：${paths.annotationPath}` : `annotation file: ${paths.annotationPath}`,
@@ -140,13 +153,17 @@ export function buildAnnotationMessage(
   const summary = document.summary !== undefined && document.summary.trim() !== ''
     ? [zh ? `我的总体说明：${document.summary.trim()}` : `overall note: ${document.summary.trim()}`, '']
     : []
-  const closing = paged
+  const closing = rendered
     ? (zh
-      ? '请按上述标注逐条处理该 PDF（带批注 PDF 的每一页已带原生批注对象，可直接在阅读器里核对）；未标注的部分保持不动，改完后逐条回应。'
-      : 'Address each mark above in the PDF (every page of the annotated PDF carries native annotation objects you can check in a reader); leave unmarked parts untouched and answer mark by mark.')
-    : (zh
-      ? '请按上述标注逐条修复该附图（改生成源，不要涂改导出的位图）；未标注的部分保持不动，改完后逐条回应。'
-      : 'Fix the figure for each mark above (change the generating source, not the exported bitmap); leave unmarked parts untouched and answer mark by mark.')
+      ? '请按上述标注逐条修改这份 HTML 的生成源（不要改动渲染结果本身）。定位元素以 `anchor.selector` 为准，`points` 只是辅助：渲染宽度变化会让坐标漂移。未标注的部分保持不动，改完后逐条回应。'
+      : 'Address each mark above in the HTML source that generates this document (not in the rendered result). Locate elements by `anchor.selector`; `points` only assists, because coordinates drift when the render width changes. Leave unmarked parts untouched and answer mark by mark.')
+    : paged
+      ? (zh
+        ? '请按上述标注逐条处理该 PDF（带批注 PDF 的每一页已带原生批注对象，可直接在阅读器里核对）；未标注的部分保持不动，改完后逐条回应。'
+        : 'Address each mark above in the PDF (every page of the annotated PDF carries native annotation objects you can check in a reader); leave unmarked parts untouched and answer mark by mark.')
+      : (zh
+        ? '请按上述标注逐条修复该附图（改生成源，不要涂改导出的位图）；未标注的部分保持不动，改完后逐条回应。'
+        : 'Fix the figure for each mark above (change the generating source, not the exported bitmap); leave unmarked parts untouched and answer mark by mark.')
   return [header, ...files, '', ...summary, ...describeMarks(document, locale), '', closing].join('\n')
 }
 

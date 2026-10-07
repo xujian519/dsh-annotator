@@ -138,6 +138,24 @@ describe('document validation', () => {
     expect(defined(parsed.marks[0]).anchor).toEqual({ tag: 'g', bbox: [0, 0, 1, 1] })
   })
 
+  it('carries the selector a rendered document is located by, capped at what we write', () => {
+    const withAnchor = (anchor: unknown): unknown => ({
+      ...document_,
+      marks: [{ id: 'x', kind: 'pen', color: '#000', points: [[0, 0]], anchor }],
+    })
+    const parsed = readAnnotationDocument(withAnchor({
+      tag: 'p', bbox: [0, 0, 10, 10], text: '第二段', selector: '#s > p:nth-of-type(2)',
+    }))
+    expect(defined(parsed.marks[0]).anchor).toEqual({
+      tag: 'p', bbox: [0, 0, 10, 10], text: '第二段', selector: '#s > p:nth-of-type(2)',
+    })
+    // An anchor beyond this is not one this plugin wrote.
+    const long = `#s > ${'div:nth-of-type(1) > '.repeat(40)}p`
+    const capped = readAnnotationDocument(withAnchor({ tag: 'p', bbox: [0, 0, 10, 10], selector: long }))
+    expect(defined(capped.marks[0]).anchor?.selector).toHaveLength(400)
+    expect(long.startsWith(defined(capped.marks[0]).anchor?.selector ?? '')).toBe(true)
+  })
+
   it('fills the timestamps a partial document omits and drops an empty summary', () => {
     const partial = { ...document_, createdAt: undefined, updatedAt: undefined, summary: '' }
     const parsed = readAnnotationDocument(partial)
@@ -479,6 +497,31 @@ describe('model-facing summary', () => {
     expect(marks[0]).toBe('① 第 1 页 矩形 (10,20)-(60,90)：（未写说明）')
     expect(marks[1]).toBe('② 第 3 页 箭头 (1,2) → (3,4)：第三页')
     expect(describeMarks(paged(), 'en')[1]).toContain('page 3 arrow')
+  })
+
+  it('names the element a mark on a rendered document points at', () => {
+    const mark: AnnotationMark = {
+      id: 'h1',
+      kind: 'rect',
+      color: '#e03131',
+      points: [[10, 20], [60, 90]],
+      text: '这段要改',
+      anchor: {
+        tag: 'p',
+        bbox: [0, 0, 1024, 200],
+        id: 'lead',
+        text: '第一段',
+        selector: '#lead',
+      },
+    }
+    // The selector is what a reader of the source resolves the mark by, so it
+    // travels with every anchor that has one.
+    expect(describeMark(mark, 0, 'zh'))
+      .toBe('① 矩形 (10,20)-(60,90)（id=lead，元素文字「第一段」，选择器 #lead）：这段要改')
+    expect(describeMark(mark, 0, 'en')).toContain('selector #lead')
+    // An anchor with nothing but a tag still names the element it points at.
+    const bare: AnnotationMark = { ...mark, anchor: { tag: 'p', bbox: [0, 0, 1, 1] } }
+    expect(describeMark(bare, 0, 'zh')).toContain('（<p>）')
   })
 
   it('numbers past ten without inventing symbols', () => {

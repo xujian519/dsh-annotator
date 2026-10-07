@@ -45,6 +45,30 @@ const pagedDocument: AnnotationDocument = {
 const paths = { annotationPath: '/w/fig1.annot.json', reviewPath: '/w/fig1.annotated.png' }
 const pagedPaths = { annotationPath: '/w/report.pdf.annot.json', reviewPath: '/w/report.pdf.annotated.pdf' }
 
+/** A rendered HTML document: one surface, measured in the pixels it was laid out in. */
+const htmlDocument: AnnotationDocument = {
+  ...document_,
+  figure: {
+    address: 'dsh-resource://file/session/s1/report.html',
+    path: '/w/report.html',
+    mediaType: 'text/html',
+    width: 1024,
+    height: 1843,
+    sha256: 'd'.repeat(64),
+  },
+  marks: [{
+    id: 'h1',
+    kind: 'rect',
+    color: '#e03131',
+    points: [[10, 20], [60, 90]],
+    text: '这段要改',
+    anchor: { tag: 'p', bbox: [0, 0, 1024, 200], text: '第一段', selector: '#s > p:nth-of-type(1)' },
+  }],
+}
+
+/** The marks file a rendered document writes: never a second artifact. */
+const htmlPaths = { annotationPath: '/w/report.html.annot.json', reviewPath: null }
+
 /** One content part handed to the session. */
 interface Part {
   readonly type: string
@@ -362,6 +386,23 @@ describe('the message the agent reads', () => {
     const withoutSummary: AnnotationDocument = { ...document_ }
     delete (withoutSummary as { summary?: string }).summary
     expect(buildAnnotationMessage(withoutSummary, paths, 'zh')).not.toContain('我的总体说明')
+  })
+
+  it('names a rendered document as one, with the locators that are its whole payload', () => {
+    const zh = buildAnnotationMessage(htmlDocument, htmlPaths, 'zh')
+    expect(zh).toContain('【HTML 标注】/w/report.html（渲染面 1024×1843，标注 1 处，文件 sha256:')
+    expect(zh).toContain('标注文件：/w/report.html.annot.json')
+    // Nothing was flattened: there is no annotated image to point at.
+    expect(zh).not.toContain('标注图：')
+    expect(zh).toContain('① 矩形 (10,20)-(60,90)（元素文字「第一段」，选择器 #s > p:nth-of-type(1)）：这段要改')
+    // The closing tells the agent where the marks really live and what to change.
+    expect(zh).toContain('这份 HTML 的生成源')
+    expect(zh).toContain('anchor.selector')
+    const en = buildAnnotationMessage(htmlDocument, htmlPaths, 'en')
+    expect(en).toContain('[HTML annotations] /w/report.html (rendered surface 1024x1843, 1 marks')
+    expect(en).toContain('annotation file: /w/report.html.annot.json')
+    expect(en).toContain('selector #s > p:nth-of-type(1)')
+    expect(en).toContain('the HTML source that generates this document')
   })
 })
 

@@ -23,6 +23,7 @@ import { figureMediaType } from '../shared/figure-kind'
 import { Canvas, type Tool } from './Canvas'
 import { composeReviewSvg, rasterizePng, bytesToDataUrl, type FigureLayer } from './export'
 import { figureSvgMarkup, parseFigureSvg, svgIntrinsicSize, svgViewBox } from './figure-dom'
+import { RENDER_WIDTH, anchorInDocument, buildRenderedDocument, loadFrameDocument } from './html-dom'
 import { AnnotatorHostError, loadAnnotation, saveAnnotation, type LoadedAnnotation } from './host-api'
 import { NAMESPACE } from './locales'
 import { MARK_FONT_STACK, markPathData, textMarkBox } from './render'
@@ -35,7 +36,7 @@ export type { AnnotatorBodyProps, AnnotatorInjected, BodyContent, PageSurface, S
 const COLORS = ['#e03131', '#1971c2', '#f08c00', '#2f9e44'] as const
 
 /**
- * The figure once its bytes are readable.
+ * The surface once its content is readable.
  *
  * One value rather than four pieces of state: a raster's own size only arrives
  * when the browser decodes it, and spread across separate `useState` calls that
@@ -59,6 +60,13 @@ type LoadedFigure =
     /** `data:` URL the export embeds, which an object URL could not be. */
     readonly dataUrl: string
   }
+  | {
+    readonly kind: 'html'
+    /** Width the document is rendered at, in figure pixels; marks are measured in it. */
+    readonly width: number
+    /** Complete document for the frame, drawing policy included. */
+    readonly document: string
+  }
 
 /** Tools in toolbar order. */
 const TOOLS: readonly { readonly tool: Tool; readonly label: string }[] = [
@@ -69,6 +77,20 @@ const TOOLS: readonly { readonly tool: Tool; readonly label: string }[] = [
   { tool: 'pen', label: 'toolPen' },
   { tool: 'text', label: 'toolText' },
 ]
+
+/**
+ * What one mark's anchor names, most specific first.
+ *
+ * An inline SVG figure names itself through its `<title>`; a rendered document
+ * has none, and names itself through its own text or its place in the document.
+ * @param mark - the mark to name.
+ * @returns the name, or an empty string when the mark points at no element.
+ */
+function anchorName(mark: AnnotationMark): string {
+  const anchor = mark.anchor
+  if (anchor === undefined) return ''
+  return [anchor.title, anchor.text, anchor.selector].find(value => value !== undefined && value !== '') ?? ''
+}
 
 /** Render one mark as the overlay preview used inside the marks list. */
 function markGlyph(mark: AnnotationMark): ReactNode {
@@ -131,7 +153,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
 
   const [fileFigure, setFileFigure] = useState<LoadedFigure | null>(null)
   const [fileRasterSize, setFileRasterSize] = useState<{ readonly width: number; readonly height: number } | null>(null)
+  /** Height a rendered document reports, in figure pixels; 0 until the frame has laid out. */
+  const [htmlHeight, setHtmlHeight] = useState(0)
   const [figureError, setFigureError] = useState<string | null>(null)
+  const frameRef = useRef<HTMLIFrameElement | null>(null)
 
   /**
    * The surface being annotated: the page a paged renderer supplied, else the
@@ -193,13 +218,25 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         viewBox: figure.viewBox,
       }
     }
+    // A rendered document has no layer: the browser cannot turn a live document
+    // into a picture, so this surface's marks travel as the marks file alone.
+    if (figure.kind === 'html') return null
     // A raster has no size until the browser has decoded it.
     if (rasterSize === null) return null
     return { kind: 'raster', dataUrl: figure.dataUrl, width: rasterSize.width, height: rasterSize.height }
   }, [figure, rasterSize])
 
-  /** The figure's measurable size; null until its bytes and dimensions are both known. */
-  const size = layer === null ? null : { width: layer.width, height: layer.height }
+  /**
+   * The surface's measurable size; null until its content and dimensions are both
+   * known. A rendered document is measurable as soon as its width is — the frame
+   * reports how tall its content is, and until it does the surface has no height.
+   */
+  const size = useMemo((): { readonly width: number; readonly height: number } | null => {
+    if (figure === null) return null
+    if (figure.kind === 'svg') return { width: figure.width, height: figure.height }
+    if (figure.kind === 'html') return { width: figure.width, height: htmlHeight }
+    return rasterSize
+  }, [figure, htmlHeight, rasterSize])
 
   // --- figure loading -------------------------------------------------------
 
@@ -229,11 +266,52 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       })
       return
     }
+    if (mediaType === 'text/html') {
+      // The frame is sized to its content, so the height it reports is the whole
+      // document's; until it reports one the marks file has no surface to describe.
+      setHtmlHeight(0)
+      setFigureError(null)
+      setFileFigure({
+        kind: 'html',
+        width: RENDER_WIDTH,
+        document: buildRenderedDocument(new TextDecoder().decode(data)),
+      })
+      return
+    }
     const objectUrl = URL.createObjectURL(new Blob([data], { type: mediaType }))
     setFileRasterSize(null)
     setFileFigure({ kind: 'raster', objectUrl, dataUrl: bytesToDataUrl(data, mediaType) })
     return () => { URL.revokeObjectURL(objectUrl) }
   }, [data, mediaType, surface, t])
+
+  // --- rendered document ----------------------------------------------------
+
+  /** The document to load into the frame, or null when this body holds no document. */
+  const htmlSource = figure?.kind === 'html' ? figure.document : null
+
+  /**
+   * Put the prepared document into the frame and take the height it reports.
+   *
+   * The frame is a same-origin sandbox with scripts off, so what it holds is
+   * markup the body may read and nothing that runs. Sizing the frame to its own
+   * content is what keeps it from scrolling internally — and that, in turn, is
+   * what makes an element's own box and a mark's figure coordinates one space.
+   */
+  useEffect(() => {
+    if (htmlSource === null) return
+    const root = loadFrameDocument(frameRef.current, htmlSource)
+    if (root === undefined) return
+    const measure = (): void => {
+      // A frame that has laid out nothing yet reports no height; keeping the last
+      // measurement leaves the surface where it was rather than collapsing it.
+      if (root.scrollHeight > 0) setHtmlHeight(root.scrollHeight)
+    }
+    measure()
+    // Content that arrives later — a font, an image, a reflow — changes the height.
+    const observer = new ResizeObserver(measure)
+    observer.observe(root)
+    return () => { observer.disconnect() }
+  }, [htmlSource])
 
   // --- host annotation ------------------------------------------------------
 
@@ -349,7 +427,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     return await rasterizePng(svg, target.width, target.height, exportScale)
   }, [marks])
 
-  const buildDocument = useCallback((target: FigureLayer): AnnotationDocument | null => {
+  const buildDocument = useCallback((target: { readonly width: number; readonly height: number }): AnnotationDocument | null => {
     if (loaded === null) return null
     const now = new Date().toISOString()
     return {
@@ -372,12 +450,16 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const run = useCallback(async (deliver: boolean): Promise<void> => {
     // The only enforcement point: the toolbar buttons stay clickable so this
     // guard is what decides, not a disabled attribute that hides the reason.
-    if (marks.length === 0 || layer === null) return
+    // A surface with no height is one nothing could have been drawn on, and it is
+    // not a surface a marks file may describe.
+    if (marks.length === 0 || size === null || size.height <= 0) return
     setBusy(deliver ? 'sending' : 'saving')
     setStatus({ tone: 'info', text: t(deliver ? 'sending' : 'saving') })
     try {
-      const review = await exportPng(layer)
-      const document_ = buildDocument(layer)
+      // Only a figure the browser can flatten has a picture to send; a rendered
+      // document travels as its marks file and the locators inside it.
+      const review = layer === null ? undefined : await exportPng(layer)
+      const document_ = buildDocument(size)
       if (document_ === null) throw new Error(t('loadFailed'))
       const saved = await saveAnnotation(address, document_, review)
       setCreatedAt(document_.createdAt)
@@ -396,7 +478,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         sessionId,
         document: document_,
         paths: saved,
-        pageImages: [{ page: 1, image: review }],
+        pageImages: review === undefined ? [] : [{ page: 1, image: review }],
         annotatedPdf: undefined,
         locale: (props.localeId ?? 'zh').startsWith('en') ? 'en' : 'zh',
       })
@@ -406,12 +488,20 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     } finally {
       setBusy(null)
     }
-  }, [address, buildDocument, exportPng, layer, marks.length, props.localeId, props.sessions, sessionId, t])
+  }, [address, buildDocument, exportPng, layer, marks.length, props.localeId, props.sessions, sessionId, size, t])
 
   // --- render ---------------------------------------------------------------
 
+  /** Whether this body holds a rendered document rather than a figure file. */
+  const isHtml = mediaType === 'text/html'
+  /** Name what one figure point landed on, for a surface that holds its own elements. */
+  const anchorAtFigurePoint = useCallback(
+    (x: number, y: number) => anchorInDocument(frameRef.current?.contentDocument, x, y),
+    [],
+  )
+
   if (mediaType === undefined) return <p className="da-hint">{t('unsupported')}</p>
-  if (data === undefined && surface === undefined) return <p className="da-hint">{t('loading')}</p>
+  if (data === undefined && surface === undefined) return <p className="da-hint">{t(isHtml ? 'htmlLoading' : 'loading')}</p>
   if (figureError !== null) return <p className="da-hint" role="alert">{figureError}</p>
 
   const selected = marks.find(mark => mark.id === selectedId) ?? null
@@ -470,7 +560,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       </div>
 
       {hostError === null ? null : <div className="da-status" data-tone="error">{`${t('readError')}${hostError}`}</div>}
-      {stale ? <div className="da-status" data-tone="error">{t('stale')}</div> : null}
+      {stale ? <div className="da-status" data-tone="error">{t(isHtml ? 'htmlStale' : 'stale')}</div> : null}
       {status === null ? null : <div className="da-status" data-tone={status.tone === 'info' ? undefined : status.tone}>{status.text}</div>}
 
       <div className="da-stage" ref={attachStage}>
@@ -490,6 +580,19 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
                   setFileRasterSize({ width: image.naturalWidth, height: image.naturalHeight })
                 }}
               />
+            ) : figure?.kind === 'html' ? (
+              // Same origin, scripts off: the body may read the frame's markup and
+              // nothing inside it can run or reach anywhere. The overlay above
+              // takes every pointer event, so the document is never navigated.
+              <iframe
+                ref={frameRef}
+                className="da-html"
+                title={t('htmlFrame')}
+                sandbox="allow-same-origin"
+                // The height the frame reported for its own content: until it
+                // reports one, the surface is not there to draw on.
+                style={{ width: figure.width, height: htmlHeight }}
+              />
             ) : null}
             {size === null ? null : (
               <Canvas
@@ -500,6 +603,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
                 color={color}
                 containerRef={figureHostRef}
                 anchoring={isVector}
+                anchorAtFigurePoint={figure?.kind === 'html' ? anchorAtFigurePoint : undefined}
                 selectedId={selectedId}
                 onSelect={setSelectedId}
                 onAdd={addMark}
@@ -542,7 +646,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
                   style={{ background: 'transparent', border: 'none', color: 'inherit', textAlign: 'left', cursor: 'pointer' }}
                   onClick={() => { setSelectedId(mark.id) }}>
                   {mark.text !== undefined && mark.text.trim() !== '' ? mark.text : t('emptyText')}
-                  {mark.anchor?.title === undefined ? '' : ` · ${t('anchor')}: ${mark.anchor.title}`}
+                  {anchorName(mark) === '' ? '' : ` · ${t('anchor')}: ${anchorName(mark)}`}
                 </button>
                 <button type="button" className="da-mark-del" onClick={() => { removeMark(mark.id) }}>{t('delete')}</button>
               </div>

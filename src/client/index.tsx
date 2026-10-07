@@ -42,6 +42,9 @@ export const PDF_BODY_ID = 'dsh-annotator/pdf'
 /** Implementation identity of the Markdown editor, shared by its metadata and its slot entry. */
 export const MD_BODY_ID = 'dsh-annotator/markdown'
 
+/** Implementation identity of the HTML annotator, shared by its metadata and its slot entry. */
+export const HTML_BODY_ID = 'dsh-annotator/html'
+
 /** Suffixes the Markdown editor claims for whole-file text documents. */
 const MD_EXTENSIONS = ['md', 'markdown'] as const
 
@@ -53,6 +56,9 @@ const BINARY_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico'] as
 
 /** Suffix the PDF renderer claims, ranking above the shell's read-only PDF preview. */
 const PDF_EXTENSIONS = ['pdf'] as const
+
+/** Suffixes the HTML annotator claims, ranking above the shell's read-only HTML preview. */
+const HTML_EXTENSIONS = ['html', 'htm'] as const
 
 /** Document renderer registry slice this plugin registers into. */
 interface DocumentPreviewsLike {
@@ -165,4 +171,24 @@ export function apply(ctx: Context): void {
       localeId: locale.getLocale().locale ?? 'zh',
     }),
   }, MarkdownBody)), 'dsh-annotator: markdown document body')
+  ctx.effect(() => previews.register({
+    id: HTML_BODY_ID,
+    extensions: HTML_EXTENSIONS,
+    priority: 'extension',
+    title: () => locale.bind(NAMESPACE)('htmlTitle'),
+    loading: 'bytes-complete',
+    wrap: false,
+  }), 'dsh-annotator: html renderer metadata')
+  ctx.effect(() => slots.inject('sidebar.right.tab.document', () => slots.register({
+    name: 'sidebar.right.tab.document',
+    key: HTML_BODY_ID,
+    locale: NAMESPACE,
+    // A rendered document is one surface with one marks file, so the body reads,
+    // writes and delivers it itself — there is no page owner above it.
+    inject: (sessionId: unknown): BodyInjected => ({
+      sessions: ctx.get('sessions') as SessionsLike | undefined,
+      sessionId: String(sessionId),
+      localeId: locale.getLocale().locale ?? 'zh',
+    }),
+  }, AnnotatorBody)), 'dsh-annotator: html document body')
 }

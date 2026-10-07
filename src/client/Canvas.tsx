@@ -37,6 +37,13 @@ export interface CanvasProps {
   readonly containerRef: RefObject<HTMLElement | null>
   /** Whether the figure is inlined SVG (only then can marks anchor to elements). */
   readonly anchoring: boolean
+  /**
+   * Name the element one figure point landed on, for a surface whose elements
+   * live in a document of their own. Present exactly when {@link anchoring} is
+   * absent in spirit: the two describe the same question for two kinds of
+   * surface, and only one of them can be answered for any given figure.
+   */
+  readonly anchorAtFigurePoint?: ((x: number, y: number) => MarkAnchor | undefined) | undefined
   /** Currently selected mark. */
   readonly selectedId: string | null
   /** Select one mark, or clear the selection. */
@@ -84,8 +91,16 @@ export function Canvas(props: CanvasProps): ReactNode {
     ]
   }
 
-  /** Describe what the pointer landed on, when the figure is an inline SVG. */
-  const anchorFor = (event: ReactPointerEvent<SVGSVGElement>): MarkAnchor | undefined => {
+  /**
+   * Describe what the mark landed on.
+   *
+   * A rendered document reports its elements in its own layout pixels, which are
+   * the figure units already, so it names them from the point. An inline SVG is
+   * hit-tested against client coordinates instead, because its elements live in
+   * the same document as this overlay and their boxes are the browser's own.
+   */
+  const anchorFor = (event: ReactPointerEvent<SVGSVGElement>, point: FigurePoint): MarkAnchor | undefined => {
+    if (props.anchorAtFigurePoint !== undefined) return props.anchorAtFigurePoint(point[0], point[1])
     const container = containerRef.current
     if (!anchoring || container === null) return undefined
     const rect = event.currentTarget.getBoundingClientRect()
@@ -146,7 +161,7 @@ export function Canvas(props: CanvasProps): ReactNode {
     const first = draft.points[0] as FigurePoint
     const last = draft.points[draft.points.length - 1] as FigurePoint
     if (draft.kind !== 'pen' && Math.hypot(last[0] - first[0], last[1] - first[1]) < 4) return
-    const anchor = anchorFor(event)
+    const anchor = anchorFor(event, last)
     const mark: AnnotationMark = { ...draft, ...(anchor === undefined ? {} : { anchor }) }
     props.onAdd(mark)
     // Selecting the new mark puts the note box on it, so the sentence that makes

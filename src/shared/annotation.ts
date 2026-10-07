@@ -33,9 +33,9 @@ export type FigurePoint = readonly [number, number]
 /** A rectangle in figure pixels: x, y, width, height. */
 export type FigureBox = readonly [number, number, number, number]
 
-/** What the mark landed on, when the figure is an inlined SVG. */
+/** What the mark landed on, when the surface exposes its own elements. */
 export interface MarkAnchor {
-  /** Element name of the innermost SVG element under the mark's tip. */
+  /** Element name of the innermost element under the mark's tip. */
   readonly tag: string
   /** That element's `id`, when it declares one. */
   readonly id?: string
@@ -43,6 +43,13 @@ export interface MarkAnchor {
   readonly title?: string
   /** That element's own text content, trimmed and capped. */
   readonly text?: string
+  /**
+   * CSS path to that element from the document body, for a mark on a rendered
+   * HTML document — the one anchor a source reader can resolve directly. Each
+   * segment is a `tag:nth-of-type(n)` step, or the element's `#id` where it has
+   * one, so the path is exact for the document it was read from.
+   */
+  readonly selector?: string
   /** Bounding box of that element in figure pixels: x, y, width, height. */
   readonly bbox: FigureBox
 }
@@ -194,6 +201,7 @@ function describeAnchor(mark: AnnotationMark, locale: SummaryLocale): string {
   if (anchor.title !== undefined && anchor.title !== '') parts.push(zh ? `元素标题「${anchor.title}」` : `element title "${anchor.title}"`)
   if (anchor.id !== undefined && anchor.id !== '') parts.push(zh ? `id=${anchor.id}` : `id=${anchor.id}`)
   if (anchor.text !== undefined && anchor.text !== '') parts.push(zh ? `元素文字「${anchor.text}」` : `element text "${anchor.text}"`)
+  if (anchor.selector !== undefined && anchor.selector !== '') parts.push(zh ? `选择器 ${anchor.selector}` : `selector ${anchor.selector}`)
   if (parts.length === 0) parts.push(`<${anchor.tag}>`)
   return `（${parts.join('，')}）`
 }

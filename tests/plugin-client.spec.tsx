@@ -1,9 +1,9 @@
-/** The browser entry: the three registrations, the injected props, and its failures. */
+/** The browser entry: the renderer registrations, the injected props, and its failures. */
 import type { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it, vi } from 'vitest'
 import { AnnotatorBody } from '../src/client/AnnotatorBody'
 import { LazyPdfBody } from '../src/client/LazyPdfBody'
-import { BODY_ID, MD_BODY_ID, PDF_BODY_ID, apply, inject, name } from '../src/client/index'
+import { BODY_ID, HTML_BODY_ID, MD_BODY_ID, PDF_BODY_ID, apply, inject, name } from '../src/client/index'
 import { MarkdownBody } from '../src/client/markdown/MarkdownBody'
 import { NAMESPACE, en, zh } from '../src/client/locales'
 import { missingService } from '../src/missing-service'
@@ -87,11 +87,11 @@ describe('browser entry', () => {
     expect(inject).toEqual(['slots', 'locale', 'documentPreviews'])
   })
 
-  it('registers both dictionaries, all three renderer kinds, and all three bodies', () => {
+  it('registers both dictionaries, every renderer kind, and every body', () => {
     const stub = stubContext()
     apply(stub.ctx)
     expect(stub.dictionaries).toEqual([{ namespace: NAMESPACE, zh, en }])
-    expect(stub.definitions).toHaveLength(3)
+    expect(stub.definitions).toHaveLength(4)
     expect(stub.definitions[0]).toMatchObject({
       id: BODY_ID,
       priority: 'extension',
@@ -121,8 +121,18 @@ describe('browser entry', () => {
       loading: 'text-pages',
       wrap: true,
     })
+    // A rendered document is annotatable at the same rank as the rest: the shell's
+    // read-only HTML preview stays available as the fallback in the dropdown.
+    expect(stub.definitions[3]).toMatchObject({
+      id: HTML_BODY_ID,
+      extensions: ['html', 'htm'],
+      priority: 'extension',
+      loading: 'bytes-complete',
+      wrap: false,
+    })
     expect(stub.injectedKeys).toEqual([
-      'sidebar.right.tab.document', 'sidebar.right.tab.document', 'sidebar.right.tab.document',
+      'sidebar.right.tab.document', 'sidebar.right.tab.document',
+      'sidebar.right.tab.document', 'sidebar.right.tab.document',
     ])
     expect(stub.slots[2]?.options).toMatchObject({
       name: 'sidebar.right.tab.document',
@@ -142,6 +152,12 @@ describe('browser entry', () => {
       locale: NAMESPACE,
     })
     expect(stub.slots[1]?.component).toBe(LazyPdfBody)
+    expect(stub.slots[3]?.options).toMatchObject({
+      name: 'sidebar.right.tab.document',
+      key: HTML_BODY_ID,
+      locale: NAMESPACE,
+    })
+    expect(stub.slots[3]?.component).toBe(AnnotatorBody)
   })
 
   it('lets the registry ask for each renderer title in the active locale', () => {
@@ -150,6 +166,7 @@ describe('browser entry', () => {
     expect(stub.definitions[0]?.title()).toBe(`${NAMESPACE}.title`)
     expect(stub.definitions[1]?.title()).toBe(`${NAMESPACE}.pdfTitle`)
     expect(stub.definitions[2]?.title()).toBe(`${NAMESPACE}.mdTitle`)
+    expect(stub.definitions[3]?.title()).toBe(`${NAMESPACE}.htmlTitle`)
   })
 
   it('injects the session face, the session id, and the active locale id', () => {
@@ -160,6 +177,16 @@ describe('browser entry', () => {
     expect(typeof factory).toBe('function')
     const injected = (factory as (id: unknown) => unknown)(123)
     expect(injected).toEqual({ sessions, sessionId: '123', localeId: 'en-US' })
+  })
+
+  it('hands the HTML body its session face and nothing it does not read', () => {
+    const sessions = { scope: () => undefined }
+    const stub = stubContext({ sessions })
+    apply(stub.ctx)
+    const factory = stub.slots[3]?.options['inject'] as (id: unknown) => unknown
+    // One surface, one marks file: the body reads, writes and delivers it itself,
+    // so it needs neither the upload service nor a page owner's seat.
+    expect(factory('s1')).toEqual({ sessions, sessionId: 's1', localeId: 'zh' })
   })
 
   it('hands the Markdown editor the upload service a long difference needs', () => {

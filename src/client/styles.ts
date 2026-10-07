@@ -34,6 +34,9 @@ export const STYLES = `
    document-preview grey, so a page has to read as one on top of it. */
 .da-surface{position:relative;margin:12px auto;transform-origin:top left;box-shadow:var(--dsw-elevation-prominent,none)}
 .da-figure{display:block;user-select:none;-webkit-user-drag:none}
+/* The rendered document takes the figure's place; the overlay above it owns every
+   pointer event, which is also what keeps a link inside it from navigating. */
+.da-html{display:block;border:0;background:#fff;pointer-events:none}
 .da-overlay{position:absolute;inset:0;touch-action:none}
 .da-overlay[data-mode="view"]{pointer-events:none}
 .da-overlay[data-tool="select"]{cursor:default}

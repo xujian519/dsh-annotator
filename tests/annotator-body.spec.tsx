@@ -3,7 +3,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AnnotationDocument } from '../src/shared/annotation'
+import type { AnnotationDocument, MarkAnchor } from '../src/shared/annotation'
 import { ANNOTATION_VERSION } from '../src/shared/annotation'
 import { AnnotatorBody, type AnnotatorBodyProps, type PageSurface, type SurfaceDraft } from '../src/client/AnnotatorBody'
 import { en, zh } from '../src/client/locales'
@@ -489,6 +489,22 @@ describe('editing marks', () => {
     expect(document.querySelectorAll('.da-mark svg')).toHaveLength(2)
   })
 
+  it('names an anchor by whatever it says, and shows no label for one that says nothing', async () => {
+    const anchored: AnnotationDocument = {
+      ...saved,
+      marks: [
+        { id: 'm1', kind: 'rect', color: '#1971c2', points: [[1, 1], [9, 9]], anchor: { tag: 'p', text: '第二段', bbox: [0, 0, 5, 5], selector: '#s > p:nth-of-type(2)' } },
+        { id: 'm2', kind: 'rect', color: '#1971c2', points: [[2, 2], [8, 8]], anchor: { tag: 'g', bbox: [0, 0, 5, 5] } },
+      ],
+    }
+    mounted = await svgBody({ annotation: anchored })
+    const entries = [...document.querySelectorAll('.da-mark-text')].map(element => element.textContent ?? '')
+    // Text before path: the quote is what a reader recognizes, the selector is how
+    // a source reader resolves it.
+    expect(entries[0]).toContain(`${zh.anchor}: 第二段`)
+    expect(entries[1]).not.toContain(zh.anchor)
+  })
+
   it('switches tools, colours, and back to view mode', async () => {
     mounted = await svgBody()
     await click(button(document.body, zh.annotate))
@@ -776,5 +792,225 @@ describe('a page a renderer supplies', () => {
     const note = defined([...document.body.querySelectorAll('textarea')][1]) as HTMLTextAreaElement
     await type(note, '自己写一句')
     expect(note.value).toBe('自己写一句')
+  })
+})
+
+describe('a rendered document', () => {
+  const HTML_ADDRESS = 'dsh-resource://file/session/s1/report.html'
+  const HTML_PATH = '/w/report.html'
+  const HTML = '<!doctype html><html><head><title>报告</title></head>'
+    + '<body><section id="s"><p id="lead">第一段</p><p>第二段</p></section></body></html>'
+
+  /** The document's own bytes. */
+  function htmlBytes(): Uint8Array {
+    return new TextEncoder().encode(HTML)
+  }
+
+  /** What the host answers a read of this document with. */
+  function htmlPayload(answers: HostAnswers = {}): unknown {
+    return {
+      ok: true,
+      figure: { path: HTML_PATH, mediaType: 'text/html', sha256: answers.sha256 ?? 'b'.repeat(64) },
+      annotation: answers.annotation ?? null,
+    }
+  }
+
+  /** A marks file for this document. */
+  const savedHtml: AnnotationDocument = {
+    version: ANNOTATION_VERSION,
+    figure: {
+      address: HTML_ADDRESS,
+      path: HTML_PATH,
+      mediaType: 'text/html',
+      width: 1024,
+      height: 1843,
+      sha256: 'b'.repeat(64),
+    },
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    marks: [{ id: 'm1', kind: 'rect', color: '#e03131', points: [[10, 10], [80, 40]], text: '这段要改' }],
+    summary: '改第二段',
+  }
+
+  /** Resize callbacks the frame body registered, so a spec can fire a layout pass. */
+  const resizeCallbacks: (() => void)[] = []
+
+  /** Mount a body over the rendered document. */
+  async function htmlBody(answers: HostAnswers = {}, props: Partial<AnnotatorBodyProps> = {}): Promise<{
+    readonly host: HTMLElement
+    readonly root: Root
+    readonly calls: Call[]
+  }> {
+    const calls: Call[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, init })
+      const respond = (body: unknown, status = 200): { readonly json: () => Promise<unknown>; readonly status: number } =>
+        ({ json: async () => body, status })
+      if (init?.method === 'POST') {
+        if (answers.saveError !== undefined) return respond({ ok: false, error: answers.saveError }, 400)
+        return respond({ ok: true, annotationPath: `${HTML_PATH}.annot.json`, reviewPath: null })
+      }
+      if (answers.readError !== undefined) return respond({ ok: false, error: answers.readError }, 404)
+      return respond(htmlPayload(answers))
+    }))
+    const result = await mountBody({
+      content: { kind: 'bytes', data: htmlBytes() },
+      resourceAddress: HTML_ADDRESS,
+      ...props,
+    })
+    return { ...result, calls }
+  }
+
+  /** The frame the body rendered the document into. */
+  function frame(): HTMLIFrameElement {
+    return defined(document.querySelector('iframe.da-html')) as HTMLIFrameElement
+  }
+
+  /** Report one content height for the frame, the way a layout pass would. */
+  async function reportHeight(height: number): Promise<void> {
+    const frameDocument = frame().contentDocument
+    if (frameDocument === null) throw new Error('the frame has no document')
+    Object.defineProperty(frameDocument.documentElement, 'scrollHeight', { configurable: true, get: () => height })
+    await act(async () => {
+      for (const callback of resizeCallbacks) callback()
+    })
+  }
+
+  /** Draw one arrow on the document, in the frame's own pixels. */
+  async function drawOnDocument(host: HTMLElement): Promise<void> {
+    const overlay = defined(host.querySelector('svg.da-overlay')) as SVGSVGElement
+    stubRect(overlay, { left: 0, top: 0, width: 1024, height: 1843 })
+    for (const [type, x, y] of [['pointerdown', 10, 10], ['pointermove', 120, 80], ['pointerup', 120, 80]] as const) {
+      await act(async () => {
+        overlay.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: x, clientY: y }))
+      })
+    }
+  }
+
+  beforeEach(() => {
+    resizeCallbacks.length = 0
+    vi.stubGlobal('ResizeObserver', class {
+      /** @param callback - the observer's callback, kept so a spec can fire it. */
+      constructor(callback: () => void) { resizeCallbacks.push(callback) }
+      /** @param _target - the observed element; this double never fires on its own. */
+      observe(_target: Element): void {}
+      /** Stop observing. */
+      disconnect(): void {}
+    })
+  })
+
+  it('renders the document into a frame that cannot run and cannot reach out', async () => {
+    mounted = await htmlBody()
+    const element = frame()
+    expect(element.getAttribute('sandbox')).toBe('allow-same-origin')
+    const frameDocument = defined(element.contentDocument)
+    expect(frameDocument.querySelector('#lead')?.textContent).toBe('第一段')
+    expect(frameDocument.querySelector('meta[http-equiv="Content-Security-Policy"]')).not.toBeNull()
+    // The frame is the surface: one fixed width, and whatever height it reports.
+    expect(element.style.width).toBe('1024px')
+    // Nothing has laid out yet, so there is no surface to describe.
+    expect(element.style.height).toBe('0px')
+    await reportHeight(1843)
+    expect(element.style.height).toBe('1843px')
+    expect(element.getAttribute('title')).toBe(zh.htmlFrame)
+  })
+
+  it('waits for bytes with the document wording rather than the figure wording', async () => {
+    stubFetch()
+    mounted = await mountBody({ content: { kind: 'text' }, resourceAddress: HTML_ADDRESS })
+    expect(document.body.textContent).toContain(zh.htmlLoading)
+    expect(document.body.textContent).not.toContain(zh.loading)
+  })
+
+  it('warns that the document moved on, in the wording a document takes', async () => {
+    mounted = await htmlBody({ annotation: savedHtml, sha256: 'c'.repeat(64) })
+    expect(document.body.textContent).toContain(zh.htmlStale)
+    expect(document.body.textContent).not.toContain(zh.stale)
+  })
+
+  it('records what a mark on the document points at, and saves the marks file alone', async () => {
+    const result = await htmlBody()
+    mounted = result
+    await reportHeight(1843)
+    await click(button(document.body, zh.annotate))
+    const frameDocument = defined(frame().contentDocument)
+    stubRect(defined(frameDocument.querySelector('#s')), { left: 0, top: 0, width: 1024, height: 800 })
+    stubRect(defined(frameDocument.querySelector('#lead')), { left: 0, top: 0, width: 1024, height: 200 })
+    await drawOnDocument(document.body)
+    expect(document.body.textContent).toContain(`${zh.anchor}: 第一段`)
+    await click(button(document.body, zh.save))
+    const post = result.calls.find(call => call.init?.method === 'POST')
+    const body = postBody(post) as {
+      reviewImage?: string
+      annotatedPdf?: string
+      annotation?: { figure: { mediaType: string; width: number; height: number }; marks: { anchor?: MarkAnchor }[] }
+    }
+    // A rendered document cannot be flattened into a picture, so the marks file is
+    // the whole artifact and the locator inside it is what a source reader uses.
+    expect(body.reviewImage).toBeUndefined()
+    expect(body.annotatedPdf).toBeUndefined()
+    expect(body.annotation?.figure).toMatchObject({ mediaType: 'text/html', width: 1024, height: 1843 })
+    expect(body.annotation?.marks[0]?.anchor).toEqual({
+      tag: 'p',
+      id: 'lead',
+      text: '第一段',
+      // An element that names itself is named by its own id, which is the one
+      // locator a reader of the source can resolve without counting siblings.
+      selector: '#lead',
+      bbox: [0, 0, 1024, 200],
+    })
+    expect(document.body.textContent).toContain(`${zh.saved}${HTML_PATH}.annot.json`)
+  })
+
+  it('sends the marks with no picture attached and the document wording in the message', async () => {
+    const { sessions, prompts } = stubSessions()
+    mounted = await htmlBody({ annotation: savedHtml }, { sessions })
+    await reportHeight(1843)
+    await click(button(document.body, zh.saveAndSend))
+    expect(prompts).toHaveLength(1)
+    const parts = defined(prompts[0]) as { readonly type: string; readonly text?: string }[]
+    // The marks travel as the message's text; nothing is attached as an image.
+    expect(parts).toHaveLength(1)
+    expect(parts[0]?.type).toBe('text')
+    expect(parts[0]?.text).toContain('【HTML 标注】')
+    expect(parts[0]?.text).toContain('渲染面 1024×1843')
+    expect(parts[0]?.text).toContain(`文件 sha256:${'b'.repeat(12)}`)
+    expect(parts[0]?.text).toContain('anchor.selector')
+  })
+
+  it('refuses to save a surface the frame never gave a height to', async () => {
+    const result = await htmlBody()
+    mounted = result
+    expect(frame().style.height).toBe('0px')
+    await click(button(document.body, zh.annotate))
+    await drawArrow(document.body)
+    await click(button(document.body, zh.save))
+    expect(result.calls.filter(call => call.init?.method === 'POST')).toHaveLength(0)
+  })
+
+  it('keeps the last height when the frame reports none later', async () => {
+    mounted = await htmlBody()
+    await reportHeight(1843)
+    expect(frame().style.height).toBe('1843px')
+    // A frame that has laid out nothing reports no height; the surface must not
+    // collapse under a reader who is drawing on it.
+    await reportHeight(0)
+    expect(frame().style.height).toBe('1843px')
+  })
+
+  it('renders the frame without a document rather than failing', async () => {
+    const original = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentDocument')
+    Object.defineProperty(HTMLIFrameElement.prototype, 'contentDocument', { configurable: true, value: null })
+    try {
+      const result = await htmlBody()
+      mounted = result
+      expect(frame()).not.toBeNull()
+      expect(document.body.textContent).not.toContain(zh.loading)
+      await click(button(document.body, zh.annotate))
+      await drawArrow(document.body)
+      expect(document.body.textContent).toContain(zh.emptyText)
+    } finally {
+      if (original !== undefined) Object.defineProperty(HTMLIFrameElement.prototype, 'contentDocument', original)
+    }
   })
 })
